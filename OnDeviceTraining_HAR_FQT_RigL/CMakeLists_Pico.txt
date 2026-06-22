@@ -1,0 +1,67 @@
+cmake_minimum_required(VERSION 3.13)
+
+# ── Pico SDK bootstrap (must come before project()) ──────────────────
+# Set PICO_SDK_PATH via environment variable or cmake -DPICO_SDK_PATH=...
+include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
+
+project(OnDeviceTraining_HAR_FQT_RigL C CXX ASM)
+set(CMAKE_C_STANDARD   11)
+set(CMAKE_CXX_STANDARD 17)
+
+# ── Pico SDK init ────────────────────────────────────────────────────
+pico_sdk_init()
+
+# ── Source files ─────────────────────────────────────────────────────
+add_executable(har_fqt_rigl
+    src/main.c
+    src/fqt.c
+    src/rigl.c
+    src/model.c
+    src/dataset.c
+    src/train.c
+)
+
+# ── Include paths ─────────────────────────────────────────────────────
+target_include_directories(har_fqt_rigl PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# ── Compile definitions ───────────────────────────────────────────────
+target_compile_definitions(har_fqt_rigl PRIVATE
+    PICO_BUILD=1
+)
+
+# ── Compiler flags ────────────────────────────────────────────────────
+target_compile_options(har_fqt_rigl PRIVATE
+    -O2
+    -Wall
+    -Wextra
+    -ffunction-sections
+    -fdata-sections
+)
+
+# ── Link libraries ────────────────────────────────────────────────────
+target_link_libraries(har_fqt_rigl PRIVATE
+    pico_stdlib          # stdio, sleep, etc.
+    m                    # libm (math: expf, sqrtf, logf)
+)
+
+# ── USB CDC stdout (serial monitor via USB cable) ─────────────────────
+# Switch to pico_enable_stdio_uart if using physical UART pins.
+pico_enable_stdio_usb(har_fqt_rigl  1)
+pico_enable_stdio_uart(har_fqt_rigl 0)
+
+# ── Generate .uf2 and .hex files ──────────────────────────────────────
+pico_add_extra_outputs(har_fqt_rigl)
+
+# ── Memory usage report ───────────────────────────────────────────────
+add_custom_command(TARGET har_fqt_rigl POST_BUILD
+    COMMAND ${CMAKE_SIZE} $<TARGET_FILE:har_fqt_rigl>
+    COMMENT "Firmware size"
+)
+
+# ── Build instructions ────────────────────────────────────────────────
+# mkdir build && cd build
+# cmake .. -DPICO_SDK_PATH=/path/to/pico-sdk
+# make -j4
+# Flash build/har_fqt_rigl.uf2 by holding BOOTSEL and copying to Pico.

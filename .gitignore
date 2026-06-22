@@ -1,0 +1,7 @@
+﻿build/
+*.o
+*.a
+*.exe
+__pycache__/
+.cmake/
+CMakeFiles/
