@@ -1,0 +1,13 @@
+add_elastic_ai_unit_test(
+        LIB_UNDER_TEST
+        Sgd
+        MORE_LIBS
+        CommonLayerLibs
+        SgdApi
+        TensorApi
+        QuantizationApi
+        StorageApi
+        LinearApi
+        ReluApi
+        LayerQuant
+)

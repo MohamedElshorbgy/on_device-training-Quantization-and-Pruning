@@ -1,0 +1,484 @@
+#define SOURCE_FILE "TENSOR_CONVERSION"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "Common.h"
+#include "DTypes.h"
+#include "MinMax.h"
+#include "Tensor.h"
+#include "TensorConversion.h"
+#include "math.h"
+
+void zeroTensorData(tensor_t *tensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(tensor);
+    size_t bytesPerElement = calcBytesPerElement(tensor->quantization);
+    memset(tensor->data, 0, numberOfElements * bytesPerElement);
+}
+
+void copyDimsAndSparsityToTensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    outputTensor->shape = inputTensor->shape;
+    if (inputTensor->sparsity) {
+        memcpy(outputTensor->sparsity, inputTensor->sparsity, sizeof(sparsity_t));
+    }
+}
+
+void convertInt32TensorToFloatTensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+    int32_t inputData[numberOfElements];
+    float outputData[numberOfElements];
+    readBytesAsInt32Array(numberOfElements, inputTensor->data, inputData);
+    zeroTensorData(outputTensor);
+    for (size_t i = 0; i < numberOfElements; i++) {
+        outputData[i] = (float)inputData[i];
+    }
+    writeFloatArrayToByteArray(numberOfElements, outputData, outputTensor->data);
+    copyDimsAndSparsityToTensor(inputTensor, outputTensor);
+}
+
+void convertInt32TensorToSymInt32Tensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+
+    symInt32QConfig_t *outputSymInt32QConfig = outputTensor->quantization->qConfig;
+    outputSymInt32QConfig->scale = 1;
+
+    memcpy(outputTensor->data, inputTensor->data, numberOfElements * sizeof(int32_t));
+}
+
+void convertInt32TensorToAsymTensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+    int32_t min = findMinInt32(inputTensor->data, numberOfElements);
+    int32_t max = findMaxInt32(inputTensor->data, numberOfElements);
+    asymQConfig_t *linearQConfig = outputTensor->quantization->qConfig;
+    int32_t qMax = pow(2, linearQConfig->qBits) - 1;
+
+    float scale = (float)(max - min) / (float)qMax;
+    int16_t zeroPoint = (int16_t)roundByMode((float)min / scale, linearQConfig->roundingMode);
+
+    int32_t outputElements[numberOfElements];
+    for (size_t elementIndex = 0; elementIndex < numberOfElements; elementIndex++) {
+        int32_t inputElement = readBytesAsInt32(&inputTensor->data[elementIndex * sizeof(int32_t)]);
+
+        outputElements[elementIndex] =
+            roundByMode(clamp((float)inputElement / scale - (float)zeroPoint, 0.f, qMax - 1),
+                        linearQConfig->roundingMode);
+    }
+    linearQConfig->scale = scale;
+    linearQConfig->zeroPoint = zeroPoint;
+    uint8_t outputElement[numberOfElements * sizeof(int32_t)];
+    writeInt32ArrayToByteArray(numberOfElements, outputElements, outputElement);
+
+    byteConversion(outputElement, 32, outputTensor->data, linearQConfig->qBits, numberOfElements);
+    copyDimsAndSparsityToTensor(inputTensor, outputTensor);
+}
+
+void convertFloatTensorToInt32Tensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+    float inputData[numberOfElements];
+    int32_t outputData[numberOfElements];
+    readBytesAsFloatArray(numberOfElements, inputTensor->data, inputData);
+    zeroTensorData(outputTensor);
+    for (size_t i = 0; i < numberOfElements; i++) {
+        outputData[i] = (int32_t)inputData[i];
+    }
+    writeInt32ArrayToByteArray(numberOfElements, outputData, outputTensor->data);
+    copyDimsAndSparsityToTensor(inputTensor, outputTensor);
+}
+
+void convertFloatTensorToSymInt32Tensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+
+    float absMax = findAbsMaxFloat(inputTensor->data, numberOfElements);
+
+    symInt32QConfig_t *symInt32QC = outputTensor->quantization->qConfig;
+    uint8_t qMaxBits = symInt32QC->qMaxBits;
+
+    const float qMax = powf(2, (float)qMaxBits - 1) - 1;
+    const float qMin = -powf(2, (float)qMaxBits - 1);
+
+    float scale;
+    if (absMax == 0.f) {
+        scale = 1.f;
+    } else {
+        scale = absMax / qMax;
+    }
+
+    symInt32QConfig_t *outputSymInt32QC = outputTensor->quantization->qConfig;
+    outputSymInt32QC->scale = scale;
+
+    int32_t *outputInt32 = (int32_t *)outputTensor->data;
+    float *inputFloat = (float *)inputTensor->data;
+
+    for (size_t i = 0; i < numberOfElements; i++) {
+        outputInt32[i] =
+            roundByMode(clamp(inputFloat[i] / scale, qMin, qMax), outputSymInt32QC->roundingMode);
+    }
+}
+
+// I DON'T HAVE TO IMPLEMENT SYM CONVERSIONS!
+void convertFloatTensorToSymTensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+
+    float min = findMinFloat(inputTensor->data, numberOfElements);
+    float max = findMaxFloat(inputTensor->data, numberOfElements);
+
+    symQConfig_t *outputSymQConfig = outputTensor->quantization->qConfig;
+    float qMax = powf(2, outputSymQConfig->qBits);
+
+    float scale = (min - max) / qMax;
+    outputSymQConfig->scale = scale;
+
+    float inputs[numberOfElements];
+    readBytesAsFloatArray(numberOfElements, inputTensor->data, inputs);
+
+    size_t bytesPerOutputElement = calcBytesPerElement(outputTensor->quantization);
+    uint8_t outputs[numberOfElements * bytesPerOutputElement];
+
+    for (size_t i = 0; i < numberOfElements; i++) {
+        outputs[i] =
+            roundByMode(clamp(inputs[i] / scale, 0.f, qMax - 1), outputSymQConfig->roundingMode);
+    }
+
+    memcpy(outputTensor->data, outputs, numberOfElements * bytesPerOutputElement);
+}
+
+// conversion from float to asym should not be needed/used
+void convertFloatTensorToAsymTensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+    float min = findMinFloat(inputTensor->data, numberOfElements);
+    float max = findMaxFloat(inputTensor->data, numberOfElements);
+
+    asymQConfig_t *asymQConfig = outputTensor->quantization->qConfig;
+    float qMax = pow(2, asymQConfig->qBits);
+
+    float scale;
+    int16_t zeroPoint;
+    if (min == max) {
+        scale = min;
+        zeroPoint = 1;
+    } else {
+        scale = (max - min) / qMax;
+        zeroPoint = (int16_t)roundByMode(min / scale, asymQConfig->roundingMode);
+    }
+
+    int32_t outputElements[numberOfElements];
+    float *inputFloat = (float *)inputTensor->data;
+
+    for (size_t i = 0; i < numberOfElements; i++) {
+        outputElements[i] =
+            roundByMode(clamp(inputFloat[i] / scale - (float)zeroPoint, 0.f, qMax - 1),
+                        asymQConfig->roundingMode);
+    }
+
+    asymQConfig->scale = scale;
+    asymQConfig->zeroPoint = zeroPoint;
+    uint8_t outputElement[numberOfElements * sizeof(int32_t)];
+    writeInt32ArrayToByteArray(numberOfElements, outputElements, outputElement);
+
+    byteConversion(outputElement, 32, outputTensor->data, asymQConfig->qBits, numberOfElements);
+
+    copyDimsAndSparsityToTensor(inputTensor, outputTensor);
+}
+
+// Important: Scale is ignored!
+void extractInt32TensorFromSymInt32Tensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+    size_t bytesPerElement = sizeof(int32_t);
+
+    int32_t inputAsInt32[numberOfElements];
+    readBytesAsInt32Array(numberOfElements, inputTensor->data, inputAsInt32);
+
+    memcpy(outputTensor->data, inputAsInt32, numberOfElements * bytesPerElement);
+}
+
+void convertSymInt32TensorToFloat32Tensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfValues = calcNumberOfElementsByTensor(inputTensor);
+    size_t bytesPerOutputElement = sizeof(float);
+
+    int32_t *inputAsInt32 = (int32_t *)inputTensor->data;
+    float output[numberOfValues];
+
+    symInt32QConfig_t *inputSymInt32QConfig = inputTensor->quantization->qConfig;
+    float scale = inputSymInt32QConfig->scale;
+
+    for (size_t i = 0; i < numberOfValues; i++) {
+        output[i] = (float)inputAsInt32[i] * scale;
+    }
+    memcpy(outputTensor->data, output, numberOfValues * bytesPerOutputElement);
+}
+
+void requantSymInt32Tensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+
+    symInt32QConfig_t *inputSymInt32QC = inputTensor->quantization->qConfig;
+    symInt32QConfig_t *outputSymInt32QC = outputTensor->quantization->qConfig;
+    /* latch BEFORE writing outputSymInt32QC->scale: when called in-place
+     * (inputTensor == outputTensor) both pointers alias the same config */
+    float inScale = inputSymInt32QC->scale;
+
+    const float qMax = powf(2, (float)outputSymInt32QC->qMaxBits - 1) - 1;
+    const float qMin = -powf(2, (float)outputSymInt32QC->qMaxBits - 1);
+
+    int32_t *inputInt32 = (int32_t *)inputTensor->data;
+    int32_t *outputInt32 = (int32_t *)outputTensor->data;
+
+    /* pass A: absmax over dequantized values — reads only (alias-safe) */
+    float absMax = 0.f;
+    for (size_t i = 0; i < numberOfElements; i++) {
+        float dequant = fabsf((float)inputInt32[i] * inScale);
+        if (dequant > absMax) {
+            absMax = dequant;
+        }
+    }
+
+    float scale;
+    if (absMax == 0.f) {
+        scale = 1.f;
+    } else {
+        scale = absMax / qMax;
+    }
+    outputSymInt32QC->scale = scale;
+
+    /* pass B: same-index read-then-write — in-place safe (int32 both sides) */
+    for (size_t i = 0; i < numberOfElements; i++) {
+        outputInt32[i] = roundByMode(clamp(((float)inputInt32[i] * inScale) / scale, qMin, qMax),
+                                     outputSymInt32QC->roundingMode);
+    }
+}
+
+void requantSymInt32TensorToScale(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+
+    symInt32QConfig_t *inputSymInt32QC = inputTensor->quantization->qConfig;
+    symInt32QConfig_t *outputSymInt32QC = outputTensor->quantization->qConfig;
+    float inScale = inputSymInt32QC->scale;
+    float targetScale = outputSymInt32QC->scale;
+
+    /* NaN-robust: !(x > 0.f) is also true for NaN, unlike (x <= 0.f) */
+    if (!(targetScale > 0.f)) {
+        PRINT_ERROR("requantSymInt32TensorToScale: target scale must be pre-set and > 0 on "
+                    "the output qConfig, got %f",
+                    targetScale);
+        exit(1);
+    }
+
+    const float qMax = powf(2, (float)outputSymInt32QC->qMaxBits - 1) - 1;
+    const float qMin = -powf(2, (float)outputSymInt32QC->qMaxBits - 1);
+
+    int32_t *inputInt32 = (int32_t *)inputTensor->data;
+    int32_t *outputInt32 = (int32_t *)outputTensor->data;
+
+    /* single same-index read-then-write pass — shared-buffer in-place safe;
+     * clamp saturates at qMin/qMax BY DESIGN (Deutel Eq. 4 analog) */
+    for (size_t i = 0; i < numberOfElements; i++) {
+        outputInt32[i] =
+            roundByMode(clamp(((float)inputInt32[i] * inScale) / targetScale, qMin, qMax),
+                        outputSymInt32QC->roundingMode);
+    }
+}
+
+void convertSymInt32TensorToAsymTensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfValues = calcNumberOfElementsByTensor(inputTensor);
+
+    symInt32QConfig_t *inputSymInt32QConfig = inputTensor->quantization->qConfig;
+    asymQConfig_t *outputAsymQConfig = outputTensor->quantization->qConfig;
+
+    float inputScale = inputSymInt32QConfig->scale;
+
+    int32_t *inputAsInt32 = (int32_t *)inputTensor->data;
+
+    float inputAsFloat[numberOfValues];
+    for (size_t i = 0; i < numberOfValues; i++) {
+        inputAsFloat[i] = inputScale * (float)inputAsInt32[i];
+    }
+
+    float min = findMinFloat((uint8_t *)inputAsFloat, numberOfValues);
+    float max = findMaxFloat((uint8_t *)inputAsFloat, numberOfValues);
+    int32_t qMax = (1 << outputAsymQConfig->qBits) - 1;
+
+    float outputScale = (max - min) / (float)qMax;
+    outputAsymQConfig->scale = outputScale;
+
+    int16_t zeroPoint = (int16_t)roundByMode(min / outputScale, outputAsymQConfig->roundingMode);
+    outputAsymQConfig->zeroPoint = zeroPoint;
+
+    int32_t outputInt[numberOfValues];
+    for (size_t i = 0; i < numberOfValues; i++) {
+        outputInt[i] =
+            roundByMode(clamp(inputAsFloat[i] / outputScale - (float)zeroPoint, 0.f, qMax),
+                        outputAsymQConfig->roundingMode);
+    }
+
+    byteConversion((uint8_t *)outputInt, 32, outputTensor->data, outputAsymQConfig->qBits,
+                   numberOfValues);
+}
+
+void convertAsymTensorToInt32Tensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    asymQConfig_t *asymQConfig = inputTensor->quantization->qConfig;
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+
+    int16_t zeroPoint = asymQConfig->zeroPoint;
+    uint8_t dataOut[numberOfElements * sizeof(int32_t)];
+    memset(dataOut, 0, numberOfElements * sizeof(int32_t));
+    byteConversion(inputTensor->data, asymQConfig->qBits, dataOut, 32, numberOfElements);
+    int32_t outputElements[numberOfElements];
+    readBytesAsInt32Array(numberOfElements, dataOut, outputElements);
+
+    for (size_t elementIndex = 0; elementIndex < numberOfElements; elementIndex++) {
+        outputElements[elementIndex] = outputElements[elementIndex] + zeroPoint;
+    }
+    writeInt32ArrayToByteArray(numberOfElements, outputElements, outputTensor->data);
+    copyDimsAndSparsityToTensor(inputTensor, outputTensor);
+}
+
+void convertAsymTensorToFloatTensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+
+    zeroTensorData(outputTensor);
+    asymQConfig_t *asymQConfig = inputTensor->quantization->qConfig;
+    int16_t zeroPoint = asymQConfig->zeroPoint;
+    int32_t inputInt[numberOfElements];
+    byteConversion(inputTensor->data, asymQConfig->qBits, (uint8_t *)inputInt, 32,
+                   numberOfElements);
+    float *outputElements = (float *)outputTensor->data;
+
+    for (size_t elementIndex = 0; elementIndex < numberOfElements; elementIndex++) {
+        outputElements[elementIndex] =
+            ((float)inputInt[elementIndex] + (float)zeroPoint) * asymQConfig->scale;
+    }
+
+    copyDimsAndSparsityToTensor(inputTensor, outputTensor);
+}
+
+void convertAsymTensorToSymInt32Tensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+    size_t bitsPerInputElement = calcBitsPerElement(inputTensor->quantization);
+    size_t bytesPerOutputElement = sizeof(int32_t);
+
+    asymQConfig_t *inputAsymQConfig = inputTensor->quantization->qConfig;
+    symInt32QConfig_t *outputSymInt32QConfig = outputTensor->quantization->qConfig;
+
+    int16_t zeroPoint = inputAsymQConfig->zeroPoint;
+
+    int32_t inputAsInt32[numberOfElements];
+
+    byteConversion(inputTensor->data, bitsPerInputElement, (uint8_t *)inputAsInt32, 32,
+                   numberOfElements);
+
+    for (size_t i = 0; i < numberOfElements; i++) {
+        inputAsInt32[i] += zeroPoint;
+    }
+
+    memcpy(outputTensor->data, inputAsInt32, numberOfElements * bytesPerOutputElement);
+    outputSymInt32QConfig->scale = inputAsymQConfig->scale;
+}
+
+char *quantTypeToString(qtype_t t) {
+    switch (t) {
+    case INT32:
+        return "INT32";
+    case FLOAT32:
+        return "FLOAT32";
+    case SYM_INT32:
+        return "SYMINT32";
+    case SYM:
+        return "SYM";
+    case ASYM:
+        return "ASYM";
+    case BOOL:
+        return "BOOL";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+void unsupportedConversionTypes(tensor_t *inputTensor, tensor_t *outputTensor) {
+    qtype_t inputQType = inputTensor->quantization->type;
+    qtype_t outputQType = outputTensor->quantization->type;
+
+    PRINT_ERROR("Conversion from %s to %s is not supported", quantTypeToString(inputQType),
+                quantTypeToString(outputQType));
+    exit(1);
+}
+
+_Static_assert(BOOL + 1 == 6, "extend conversionMatrix when adding qtype_t entries");
+
+conversionFunction_t conversionMatrix[6][6] = {
+    [INT32] = {[INT32] = NULL,
+               [FLOAT32] = convertInt32TensorToFloatTensor,
+               [SYM_INT32] = convertInt32TensorToSymInt32Tensor,
+               [SYM] = unsupportedConversionTypes,
+               [ASYM] = convertInt32TensorToAsymTensor,
+               [BOOL] = unsupportedConversionTypes},
+    [FLOAT32] = {[INT32] = convertFloatTensorToInt32Tensor,
+                 [FLOAT32] = NULL,
+                 [SYM_INT32] = convertFloatTensorToSymInt32Tensor,
+                 [SYM] = unsupportedConversionTypes,
+                 [ASYM] = convertFloatTensorToAsymTensor,
+                 [BOOL] = unsupportedConversionTypes},
+    [SYM_INT32] = {[INT32] = extractInt32TensorFromSymInt32Tensor,
+                   [FLOAT32] = convertSymInt32TensorToFloat32Tensor,
+                   [SYM_INT32] = requantSymInt32Tensor,
+                   [SYM] = unsupportedConversionTypes,
+                   [ASYM] = convertSymInt32TensorToAsymTensor,
+                   [BOOL] = unsupportedConversionTypes},
+    [SYM] = {[INT32] = unsupportedConversionTypes,
+             [FLOAT32] = unsupportedConversionTypes,
+             [SYM_INT32] = unsupportedConversionTypes,
+             [SYM] = NULL,
+             [ASYM] = unsupportedConversionTypes,
+             [BOOL] = unsupportedConversionTypes},
+    [ASYM] = {[INT32] = convertAsymTensorToInt32Tensor,
+              [FLOAT32] = convertAsymTensorToFloatTensor,
+              [SYM_INT32] = convertAsymTensorToSymInt32Tensor,
+              [SYM] = unsupportedConversionTypes,
+              [ASYM] = NULL,
+              [BOOL] = unsupportedConversionTypes},
+    [BOOL] = {[INT32] = unsupportedConversionTypes,
+              [FLOAT32] = unsupportedConversionTypes,
+              [SYM_INT32] = unsupportedConversionTypes,
+              [SYM] = unsupportedConversionTypes,
+              [ASYM] = unsupportedConversionTypes,
+              [BOOL] = NULL}};
+
+static void convertTensorsWithSameType(tensor_t *inputTensor, tensor_t *outputTensor,
+                                       qtype_t qType) {
+    size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
+    size_t numberOfBytes = calcNumberOfBytesForData(inputTensor->quantization, numberOfElements);
+
+    memmove(outputTensor->data, inputTensor->data, numberOfBytes);
+
+    switch (qType) {
+    case SYM_INT32:
+        symInt32QConfig_t *inputSymIntQC = inputTensor->quantization->qConfig;
+        symInt32QConfig_t *outputSymIntQC = outputTensor->quantization->qConfig;
+        outputSymIntQC->scale = inputSymIntQC->scale;
+        break;
+    case ASYM:
+        asymQConfig_t *inputAsymQC = inputTensor->quantization->qConfig;
+        asymQConfig_t *outputAsymQC = outputTensor->quantization->qConfig;
+        outputAsymQC->scale = inputAsymQC->scale;
+        outputAsymQC->zeroPoint = inputAsymQC->zeroPoint;
+        break;
+    default:
+        break;
+    }
+}
+
+void convertTensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+    qtype_t inputDType = inputTensor->quantization->type;
+    qtype_t outputDType = outputTensor->quantization->type;
+
+    if (inputDType == outputDType) {
+        convertTensorsWithSameType(inputTensor, outputTensor, inputDType);
+    } else {
+        conversionFunction_t conversionFn = conversionMatrix[inputDType][outputDType];
+        if (conversionFn == NULL) {
+            PRINT_ERROR("No conversion function registered for %s to %s",
+                        quantTypeToString(inputDType), quantTypeToString(outputDType));
+            exit(1);
+        }
+        conversionFn(inputTensor, outputTensor);
+    }
+}
