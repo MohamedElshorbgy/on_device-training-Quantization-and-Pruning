@@ -1,4 +1,4 @@
-#ifndef ODT_COMMON_H
+#ifndef ODT_COMMON_H                                                                                     ////mean that if the file ODT_COMMON_H not defined , define it and read the file otherwise skip the file
 #define ODT_COMMON_H
 
 #include <stdbool.h>
