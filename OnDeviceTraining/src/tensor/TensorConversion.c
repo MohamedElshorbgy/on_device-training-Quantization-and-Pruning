@@ -487,7 +487,9 @@ char *quantTypeToString(qtype_t t) {                                            
     }
 }
 
-void unsupportedConversionTypes(tensor_t *inputTensor, tensor_t *outputTensor) {
+void unsupportedConversionTypes(tensor_t *inputTensor, tensor_t *outputTensor) {              //Purpose: This function serves as a safe fallback handler for data pathways that are mathematically invalid or unimplemented
+                                                                                                (such as converting a BOOL directly into a quantized ASYM configuration).Behavior: It prints a clear, human-readable error
+                                                                                                utilizing your quantTypeToString utility and immediately terminates execution to prevent memory corruption downstream.
     qtype_t inputQType = inputTensor->quantization->type;
     qtype_t outputQType = outputTensor->quantization->type;
 
@@ -496,9 +498,16 @@ void unsupportedConversionTypes(tensor_t *inputTensor, tensor_t *outputTensor) {
     exit(1);
 }
 
-_Static_assert(BOOL + 1 == 6, "extend conversionMatrix when adding qtype_t entries");
+_Static_assert(BOOL + 1 == 6, "extend conversionMatrix when adding qtype_t entries");         //Purpose: This is a powerful defensive programming tactic. _Static_assert runs during compilation, not at runtime.How it
+                                                                                                works: It checks if your qtype_t enumeration has exactly 6 items (INT32, FLOAT32, SYM_INT32, SYM, ASYM, BOOL). If a future
+                                                                                                developer adds a 7th type (e.g., INT8) to the enum but forgets to expand the dispatch table, the code will fail to compile,
+                                                                                                flashing this custom error message.
 
-conversionFunction_t conversionMatrix[6][6] = {
+conversionFunction_t conversionMatrix[6][6] = {                                               //The Architecture: In C, this is called designated initialization. It registers specific functions exactly to the index
+                                                                                                matching their enum values.The Mapping Strategy:Valid Paths: Maps to a specific conversion function (e.g., [INT32][FLOAT32] 
+                                                                                                points straight to the address of convertInt32TensorToFloatTensor).Invalid Paths: Explicitly routes to unsupportedConversionTypes.
+                                                                                                Identical Types (NULL): Points to NULL. If the input and output types match perfectly, the engine will handle them using a 
+                                                                                                specialized, lightning-fast memory routine rather than running a complex conversion loop.
     [INT32] = {[INT32] = NULL,
                [FLOAT32] = convertInt32TensorToFloatTensor,
                [SYM_INT32] = convertInt32TensorToSymInt32Tensor,
@@ -536,8 +545,14 @@ conversionFunction_t conversionMatrix[6][6] = {
               [ASYM] = unsupportedConversionTypes,
               [BOOL] = NULL}};
 
-static void convertTensorsWithSameType(tensor_t *inputTensor, tensor_t *outputTensor,
-                                       qtype_t qType) {
+static void convertTensorsWithSameType(tensor_t *inputTensor, tensor_t *outputTensor,             
+                                       qtype_t qType) {                                                  //Purpose: Handles the fast-path when a tensor is being copied to another tensor of the exact same type, or when a 
+                                                                                                           tensor is being re-quantized in-place.Mechanics:It calculates how many bytes the input tensor actually consumes 
+                                                                                                           via calcNumberOfBytesForData.It executes a memmove on the raw memory buffers. memmove is used instead of memcpy 
+                                                                                                           because it is completely safe even if the source and destination memory blocks physically overlap.Metadata 
+                                                                                                           Synchronization: A simple memory copy is not enough for quantized tensors; their meta-parameters must also match. 
+                                                                                                           The switch statement mirrors the configurations over:For SYM_INT32: It transfers the scale.For ASYM: It transfers
+                                                                                                           both the scale and the zeroPoint
     size_t numberOfElements = calcNumberOfElementsByTensor(inputTensor);
     size_t numberOfBytes = calcNumberOfBytesForData(inputTensor->quantization, numberOfElements);
 
@@ -560,7 +575,10 @@ static void convertTensorsWithSameType(tensor_t *inputTensor, tensor_t *outputTe
     }
 }
 
-void convertTensor(tensor_t *inputTensor, tensor_t *outputTensor) {
+void convertTensor(tensor_t *inputTensor, tensor_t *outputTensor) {                             //Execution Flow:It grabs the input type and target output type.If they are identical, it runs the fast-path
+                                                                                                  convertTensorsWithSameType.If they are different, it looks up the matrix coordinate: 
+                                                                                                  conversionMatrix[inputDType][outputDType].It extracts the matching function pointer (conversionFn) and executes a direct
+                                                                                                  jump to that routine, immediately passing the input and output pointers.
     qtype_t inputDType = inputTensor->quantization->type;
     qtype_t outputDType = outputTensor->quantization->type;
 
