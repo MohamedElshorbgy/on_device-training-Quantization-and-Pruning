@@ -51,13 +51,18 @@ void readBytesAsInt32Array(size_t numberOfValues, uint8_t *bytes, int32_t *outpu
     }
 }
 
-float readBytesAsFloat(uint8_t *bytes) {
+float readBytesAsFloat(uint8_t *bytes) {                                                            //Converts 4 continuous bytes into a single floating-point number.How it works: It allocates a temporary local float 
+                                                                                                      variables x. It then copies exactly sizeof(float) bytes (which is almost universally \(4\) bytes on modern systems) 
+                                                                                                      from the memory address pointed to by bytes into the address of x.                                
     float x;
     memcpy(&x, bytes, sizeof(float));
     return x;
 }
 
-void readBytesAsFloatArray(size_t numberOfValues, uint8_t *bytes, float *outputArray) {
+void readBytesAsFloatArray(size_t numberOfValues, uint8_t *bytes, float *outputArray) {             //Deserializes a large stream of bytes into an array of floats.How it works:It loops through the desired number 
+                                                                                                      of float elements (numberOfValues).It calculates the offset in the byte buffer using byteIndex = i * 4. For example, 
+                                                                                                      the 3rd float (\(i = 2\)) starts at byte index \(8\).It passes the memory address of that specific offset
+                                                                                                      (&bytes[byteIndex]) to the readBytesAsFloat function.The returned float is stored sequentially into the outputArray.
     for (size_t i = 0; i < numberOfValues; i++) {
         size_t byteIndex = i * sizeof(float);
         float value = readBytesAsFloat(&bytes[byteIndex]);
@@ -65,11 +70,14 @@ void readBytesAsFloatArray(size_t numberOfValues, uint8_t *bytes, float *outputA
     }
 }
 
-void writeInt32ToByteArray(int32_t value, uint8_t *bytes) {
+void writeInt32ToByteArray(int32_t value, uint8_t *bytes) {                                         //Packs a single 32-bit integer or a 32-bit float into a 4-byte destination buffer.How it works: They take the variable
+                                                                                                      (value) and copy its raw memory footprint directly into the destination array pointed to by bytes.
     memcpy(bytes, &value, sizeof(int32_t));
 }
 
-void writeInt32ArrayToByteArray(size_t numberOfValues, int32_t *valueArray, uint8_t *bytes) {
+void writeInt32ArrayToByteArray(size_t numberOfValues, int32_t *valueArray, uint8_t *bytes) {       //Serializes entire arrays of integers or floats into a single flat byte stream.How it works: Much like the array 
+                                                                                                      reading function, these loop through the source arrays, calculate the byte index offset step-by-step 
+                                                                                                      (\(0, 4, 8, 12 \dots\)), and copy the 4-byte blocks into the destination bytes buffer one after the other.
     for (size_t i = 0; i < numberOfValues; i++) {
         size_t byteIndex = i * sizeof(int32_t);
         memcpy(&bytes[byteIndex], &valueArray[i], sizeof(int32_t));
