@@ -11,7 +11,8 @@
 #include "Quantization.h"
 #include "Tensor.h"
 
-size_t calcNumberOfElementsByShape(shape_t *shape) {
+size_t calcNumberOfElementsByShape(shape_t *shape) {                                       //How it works: It sets a counter to 1 and loops through every value in the shape->dimensions array, multiplying them together.
+                                                                                             For a 3D video layer shaped [10, 28, 28], it computes \(10 \times 28 \times 28 = 7,840\) total elements.
     size_t numElem = 1;
     size_t numberOfDimensions = shape->numberOfDimensions;
     size_t *dimensions = shape->dimensions;
@@ -29,7 +30,10 @@ size_t calcNumberOfElementsByParameter(parameter_t *parameter) {
     return calcNumberOfElementsByShape(parameter->param->shape);
 }
 
-size_t calcBytesPerElement(quantization_t *quantization) {
+size_t calcBytesPerElement(quantization_t *quantization) {                                   //How it works: These check the quantization->type enum using a switch statement:For standard types (INT32, FLOAT32, SYM_INT32),
+                                                                                               they cleanly return 4 bytes (\(32\) bits).For quantized types (SYM, ASYM), they dynamically read the nested configuration's qBits
+                                                                                               value.The Ceiling Logic: In calcBytesPerElement, if a quantized tensor uses an odd bit width like 9-bit quantization, it 
+                                                                                               calculates ceil(9.0 / 8.0) and returns 2 bytes, avoiding memory truncation.
     switch (quantization->type) {
     case INT32:
         return sizeof(int32_t);
@@ -82,7 +86,10 @@ size_t calcBitsPerTensor(tensor_t *tensor) {
     return bitsPerElement * numElements;
 }
 
-size_t calcBytesPerTensor(tensor_t *tensor) {
+size_t calcBytesPerTensor(tensor_t *tensor) {                                                           //The Bug: calcBytesPerTensor utilizes standard integer division / 8. If you have a 1-bit boolean tensor with 3 
+                                                                                                          elements, bitsPerTensor equals 3. 3 / 8 in C integer math results in 0 bytes, causing a critical buffer overflow 
+                                                                                                          if used for memory allocation.The Correction: It should use the same ceiling-rounding padding math found in 
+                                                                                                          calcNumberOfBytesForData: return (bitsPerTensor + 7) / 8;.
     size_t bitsPerTensor = calcBitsPerTensor(tensor);
     return bitsPerTensor / 8;
 }
@@ -108,7 +115,9 @@ size_t calcNumberOfBytesForData(quantization_t *q, size_t numberOfElements) {
     }
 }
 
-bool tensorBoolGet(tensor_t const *tensor, size_t flatIndex) {
+bool tensorBoolGet(tensor_t const *tensor, size_t flatIndex) {                                 //Retrieval Example: To get index 11, it searches byte 11 / 8 = 1 and isolates bit 11 % 8 = 3. It shifts the byte down 
+                                                                                                 by 3 bits and masks it with 1u to extract a clean true/false state.tensorBoolSet: Operates inversely. It uses bitwise
+                                                                                                 OR (|=) with a shifted mask to change a single bit to 1, or a bitwise AND with a inverted mask (&= ~) to clear a bit to 0.
     if (tensor->quantization->type != BOOL) {
         PRINT_ERROR("tensorBoolGet called on non-BOOL tensor");
         exit(1);
@@ -147,7 +156,8 @@ void print_binary_uint8(uint8_t x) {
     putchar('\n'); /* newline for convenience */
 }
 
-uint32_t getBitmask(uint32_t startbit, uint32_t endbit) {
+uint32_t getBitmask(uint32_t startbit, uint32_t endbit) {                                          //Generates a 1-byte mask containing continuous 1s only between the startbit and endbit intervals. This isolations 
+                                                                                                     window lets the engine update or read a sub-section of a byte without corrupting surrounding variables.
     uint32_t endbitInternal = endbit - (startbit / 8) * 8;
     uint32_t startbitInternal = startbit - (startbit / 8) * 8;
     uint32_t counter = 0;
@@ -163,7 +173,9 @@ uint32_t getBitmask(uint32_t startbit, uint32_t endbit) {
     return counter;
 }
 
-uint8_t readByte(uint8_t data, uint8_t startbit, uint8_t endbit) {
+uint8_t readByte(uint8_t data, uint8_t startbit, uint8_t endbit) {                                //readByte: Masks a raw byte and shifts the internal data window down so that the requested bit field becomes a standard 
+                                                                                                    right-aligned integer value.writeByte: Takes a sub-byte integer payload, shifts it up to match the targeted start bit 
+                                                                                                    position, applies a protective mask, and fuses it onto the existingData byte using a bitwise OR (|).
     uint8_t bitmask = getBitmask(startbit, endbit);
     uint8_t intermediate = data & bitmask;
     intermediate >>= startbit - (startbit / 8) * 8;
@@ -193,7 +205,13 @@ int min(int a, int b) {
 }
 
 void byteConversion(uint8_t *dataIn, size_t dataInBits, uint8_t *dataOut, size_t dataOutBits,
-                    size_t numValues) {
+                    size_t numValues) {                                                                     //The function runs a nested state-machine loop that tracks input data indexes, output data indexes, and bit 
+                                                                                                              offset heads simultaneously.Widening (e.g., 4-bit to 8-bit): The loop reads small bit windows via readByte, 
+                                                                                                              writes them to larger targets via writeByte, and steps the output trackers forward faster than the input 
+                                                                                                              trackers.Narrowing (e.g., 16-bit to 8-bit): Squeezes larger variables down.The min() Stepper Engine: The 
+                                                                                                              calculations valuesRead and valuesWritten check how many bits remain before the current byte boundary is hit.
+                                                                                                              The loop then advances its bit offsets by the minValue delta, gracefully transitioning array indexes 
+                                                                                                              (dataInIndex++, dataOutIndex++) precisely when crossing byte thresholds.
     memset(dataOut, 0, (numValues * dataOutBits - 1) / 8 + 1);
     size_t dataOutIndex = 0;
     size_t dataInIndex = 0;
