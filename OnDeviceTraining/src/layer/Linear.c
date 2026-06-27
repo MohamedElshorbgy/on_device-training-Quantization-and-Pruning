@@ -13,7 +13,8 @@
 #include "Rounding.h"
 #include "TensorConversion.h"
 
-void linearInitConfig(linearConfig_t *linearConfig, parameter_t *weights, parameter_t *bias,
+void linearInitConfig(linearConfig_t *linearConfig, parameter_t *weights, parameter_t *bias,                  //This is the layer’s configuration constructor. It saves structural memory addresses pointing to your training
+                                                                                                                 parameters (weights, bias) and quantization configurations into a single, unified linearConfig box
                       quantization_t *forwardQ, quantization_t *weightGradQ,
                       quantization_t *biasGradQ, quantization_t *propLossQ) {
     linearConfig->weights = weights;
@@ -24,8 +25,14 @@ void linearInitConfig(linearConfig_t *linearConfig, parameter_t *weights, parame
     linearConfig->propLossQ = propLossQ;
 }
 
-void linearForwardFloat(tensor_t *w, tensor_t *b, tensor_t *input, tensor_t *output) {
-    transposeTensor(w, 0, 1);
+void linearForwardFloat(tensor_t *w, tensor_t *b, tensor_t *input, tensor_t *output) {                       //transposeTensor(w, 0, 1): Swaps dimension 0 (rows) with dimension 1 (columns) in the weight tensor's metadata
+                                                                                                               tracker.matmulFloat32TensorsWithBias(...): Fires up the matrix engine we reviewed earlier to calculate the fused
+                                                                                                               dot product and bias offset.transposeTensor(w, 0, 1): Flips the weights matrix back to its original structural 
+                                                                                                               layout so subsequent routines do not read it corrupted.The master routing function (linearForward) acts as a 
+                                                                                                               automated valve. It looks up the user's targeted execution configuration (linearConfig->forwardQ->type) inside
+                                                                                                               a clean switch-case statement. If it reads FLOAT32, it pipes data into linearForwardFloat; if it reads
+                                                                                                               SYM_INT32, it switches directly to linearForwardSymInt32.
+    transposeTensor(w, 0, 1); 
     matmulFloat32TensorsWithBias(input, w, output, b);
     transposeTensor(w, 0, 1);
 }
@@ -55,7 +62,14 @@ void linearForward(layer_t *linearLayer, tensor_t *input, tensor_t *output) {
     }
 }
 
-void linearCalcWeightGradsFloat32(tensor_t *forwardInput, tensor_t *loss, tensor_t *weightGrads) {
+void linearCalcWeightGradsFloat32(tensor_t *forwardInput, tensor_t *loss, tensor_t *weightGrads) {                 //Transposition & Multiplication: Flips the incoming loss matrix sideways, multiplies it against the inputs
+                                                                                                                     stored from the forward pass (forwardInput), and flattens the result into a local stack tracker 
+                                                                                                                     (intermediateWGrad).Accumulation: Instead of overwriting existing data, it uses addFloat32TensorsInplace.
+                                                                                                                     This is critical for networks that run multiple iterations (batches) because it accumulates and sums the 
+                                                                                                                     error gradients across multiple calculation windows before taking an optimization step.The Fallback 
+                                                                                                                     Engine (linearCalcWeightGradsFloatWithConversion)What happens if your system is running on compressed 
+                                                                                                                     low-power types (like integer representations) but needs to compute standard floating-point 
+                                                                                                                     backpropagation? This routine functions as a dynamic data translator:
     size_t numberOfWeights = calcNumberOfElementsByTensor(weightGrads);
 
     tensor_t intermediateWGrad;
@@ -85,7 +99,13 @@ void linearCalcWeightGradsFloatWithConversion(linearConfig_t *linearConfig, tens
     quantization_t forwardInputFloatQ;
     initFloat32Quantization(&forwardInputFloatQ);
 
-    if (fwdIn->quantization->type != FLOAT32) {
+    if (fwdIn->quantization->type != FLOAT32) {                                                                 //Dynamic Detection: For the input, loss, and weight parameters, it checks if their quantization configuration
+                                                                                                                  type is anything other than FLOAT32.On-the-Fly Translation: If it detects a non-float type, it allocates a
+                                                                                                                  temporary array on the processor's stack (forwardInputFloatData), configures an internal tracker structure 
+                                                                                                                  (&forwardInputFloat), and copies/dequantizes the values using convertTensor.Piping & Re-Serialization: It 
+                                                                                                                  passes these temporary floating-point snapshots directly into your core linearCalcWeightGradsFloat32 math 
+                                                                                                                  engine. Once finished, it copies the final floating-point gradients back into the original parameter
+                                                                                                                  format (convertTensor(wG, paramWG)) to complete the training loop step cleanly.
         setTensorValuesForConversion((uint8_t *)forwardInputFloatData, &forwardInputFloatQ, fwdIn,
                                      &forwardInputFloat);
         convertTensor(forwardInput, &forwardInputFloat);
@@ -121,7 +141,10 @@ void linearCalcWeightGradsFloatWithConversion(linearConfig_t *linearConfig, tens
     convertTensor(wG, paramWG);
 }
 
-void linearCalcBiasGradsFloat32(tensor_t *loss, tensor_t *biasGrad) {
+void linearCalcBiasGradsFloat32(tensor_t *loss, tensor_t *biasGrad) {                              //The Concept (Reduction Over Batch Axis): If you process a batch of 32 inputs through a layer with 10 output features,
+                                                                                                     your loss tensor will be a 32 × 10 grid. However, your layer only has 10 biases (one for each feature).The Operation: 
+                                                                                                     This function loops through each feature (f). For that feature, it sweeps vertically down all items in the batch (n), 
+                                                                                                     adds up their losses into a running sum, and accumulates the total directly into the bias gradient memory (bg[f] += sum).
     /* Reduce the loss over the batch (leading) axis into the rank-1 bias grad:
      * biasGrad[f] += sum_n loss[n,f]. Mirrors conv1dCalcBiasGradsFloat32. */
     size_t numFeatures = calcNumberOfElementsByTensor(biasGrad);
@@ -138,7 +161,7 @@ void linearCalcBiasGradsFloat32(tensor_t *loss, tensor_t *biasGrad) {
     }
 }
 
-void linearCalcBiasGradsFloatWithConversion(linearConfig_t *linearConfig, tensor_t *loss) {
+void linearCalcBiasGradsFloatWithConversion(linearConfig_t *linearConfig, tensor_t *loss) {                 //
     tensor_t *paramBG = getGradFromParameter(linearConfig->bias);
     tensor_t *bG = paramBG;
     tensor_t *l = loss;
@@ -172,7 +195,9 @@ void linearCalcBiasGradsFloatWithConversion(linearConfig_t *linearConfig, tensor
     convertTensor(bG, paramBG);
 }
 
-void linearCalcPropLossFloat32(tensor_t *loss, tensor_t *weights, tensor_t *propLoss) {
+void linearCalcPropLossFloat32(tensor_t *loss, tensor_t *weights, tensor_t *propLoss) {                     //This function calls your core matrix multiplication routine (matmulFloat32Tensors). It multiplies the current
+                                                                                                              layer's incoming error grid (loss) by its internal weights matrix. The output is written into propLoss, which 
+                                                                                                              becomes the incoming error grid for the previous layer.
     matmulFloat32Tensors(loss, weights, propLoss);
 }
 
@@ -185,7 +210,10 @@ void linearCalcPropLossFloatWithConversion(linearConfig_t *linearConfig, tensor_
     /* #187: the inputs are converted below, but the result is written RAW into
      * the caller's propLoss. A non-FLOAT32 propLoss would receive float bits
      * into an int32 buffer — silent garbage. Fail fast (Matmul convention). */
-    if (propLoss->quantization->type != FLOAT32) {
+    if (propLoss->quantization->type != FLOAT32) {                                                          //The Trap: If the engine converts weights and loss to float, it runs a floating-point matrix multiplication.
+                                                                                                              That matrix math outputs raw float bits. If the destination propLoss tensor is actually a raw integer buffer,
+                                                                                                              the code would blindly write raw float bits directly into integer slots.The Fix: This guard halts execution 
+                                                                                                              immediately ("fails fast") to prevent silent memory garbage from breaking the neural network's training.
         PRINT_ERROR("Linear backward: propLossQ is FLOAT32 but the propLoss tensor is not (#187)");
         exit(1);
     }
@@ -218,7 +246,9 @@ void linearCalcPropLossFloatWithConversion(linearConfig_t *linearConfig, tensor_
 }
 
 void backwardFloat(linearConfig_t *linearConfig, tensor_t *forwardInput, tensor_t *loss,
-                   tensor_t *propLossTensor) {
+                   tensor_t *propLossTensor) {                                                     //When backpropagation reaches this layer, it triggers this master script. It safely sets up workspace buffers, calculates
+                                                                                                     how the weights should change, calculates how the biases should change, and finally calculates the error map to hand 
+                                                                                                     off to the next layer upstream.
     size_t numberOfWeights = calcNumberOfElementsByShape(linearConfig->weights->param->shape);
 
     tensor_t *weightGrad = getGradFromParameter(linearConfig->weights);
