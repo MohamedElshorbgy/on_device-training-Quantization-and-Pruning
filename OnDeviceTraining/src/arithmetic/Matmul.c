@@ -28,7 +28,9 @@ static void matmulIntCore(tensor_t *aTensor, tensor_t *bTensor, tensor_t *output
     if (aTensor->shape->numberOfDimensions > 2 || bTensor->shape->numberOfDimensions > 2) {
         PRINT_ERROR("Matmul only supports up to 2D Tensors");
         exit(1);
-    }
+    }                                                                                                        //Computers get easily confused if you give them the wrong shapes. First, the code checks if you handed it 
+                                                                                                               something more complicated than a 2D grid (like a 3D video file). If you did, it throws an error and 
+                                                                                                               completely stops the program (exit(1)).
 
     size_t aNumberOfDims = aTensor->shape->numberOfDimensions;
     size_t *aDims = aTensor->shape->dimensions;
@@ -36,7 +38,9 @@ static void matmulIntCore(tensor_t *aTensor, tensor_t *bTensor, tensor_t *output
     size_t *bDims = bTensor->shape->dimensions;
 
     size_t aRows, aColumns;
-    if (aNumberOfDims < 2) {
+    if (aNumberOfDims < 2) {                                                                                  //If you pass the engine a simple 1D list of numbers (a vector) instead of a 2D grid, the code auto-corrects.
+                                                                                                                It pretends your list is a grid with just 1 row. This makes the rest of the code simpler because it can treat
+                                                                                                                everything as a 2D grid.
         aRows = 1;
         aColumns = getDimensionsByIndex(aTensor, 0);
     } else {
@@ -49,7 +53,13 @@ static void matmulIntCore(tensor_t *aTensor, tensor_t *bTensor, tensor_t *output
 
     size_t resultCounter = 0;
 
-    if (aColumns != bRows) {
+    if (aColumns != bRows) {                                                                                   //In math, you cannot multiply two grids together unless the width (Columns) of the first grid matches the height
+                                                                                                                 (Rows) of the second grid. If they don't line up perfectly, the math is impossible, so the code cancels the 
+                                                                                                                 operation.Step 4: The 3-Layer Loop (The Engine Room)This is where the actual math happens. The code spins up three 
+                                                                                                                 nested loops:Row Loop (rowIndex): Locks onto a row in Grid A.Column Loop (columnIndex): Locks onto a column in Grid
+                                                                                                                 B.Inner Dot-Product Loop (i): Moves across that row and down that column at the exact same time.Inside the 
+                                                                                                                 innermost loop, it reads a value from Grid A (aValue) and a value from Grid B (bValue), multiplies them together
+                                                                                                                 using mulInt32s(), and adds them to a running total called result.
         PRINT_ERROR("Rows dont match Columns");
         PRINT_DEBUG("aColumns: %lu, bRows: %lu\n", aColumns, bRows);
         exit(1);
@@ -65,7 +75,10 @@ static void matmulIntCore(tensor_t *aTensor, tensor_t *bTensor, tensor_t *output
                 } else {
                     size_t aIndices[] = {rowIndex, i};
                     size_t aValueIndex = calcElementIndexByIndices(
-                        aNumberOfDims, aDims, aIndices, aTensor->shape->orderOfDimensions);
+                        aNumberOfDims, aDims, aIndices, aTensor->shape->orderOfDimensions);                     //This is the most unique part of this specific library. Sometimes a program "rotates" or transposes a matrix in its
+                                                                                                                   mind without actually moving the numbers around in the computer's RAM.This line calls a helper function to translate the
+                                                                                                                   logical grid coordinates (like "Row 2, Column 3") into the exact physical byte location in the memory sticks, ensuring the
+                                                                                                                   computer never grabs the wrong data.
                     aByteIndex = aValueIndex * sizeof(int32_t);
                 }
                 int32_t aValue = readBytesAsInt32(&aTensor->data[aByteIndex]);
@@ -84,7 +97,8 @@ static void matmulIntCore(tensor_t *aTensor, tensor_t *bTensor, tensor_t *output
                 result += mulInt32s(aValue, bValue);
             }
 
-            size_t outputByteIndex = resultCounter * sizeof(int32_t);
+            size_t outputByteIndex = resultCounter * sizeof(int32_t);                                   //Once the inner loop finishes calculating the total for that specific slot, it takes the final result number and saves it into 
+                                                                                                        the outputTensor data buffer. It then bumps up the resultCounter and moves to the next slot until the entire new grid is filled.
             writeInt32ToByteArray(result, &outputTensor->data[outputByteIndex]);
             resultCounter++;
         }
@@ -191,7 +205,12 @@ void matmulFloatTensorsWithInstructionCounter(tensor_t *aTensor, tensor_t *bTens
 }
 
 void matmulFloat32TensorsWithBias(tensor_t *aTensor, tensor_t *bTensor, tensor_t *outputTensor,
-                                  tensor_t *bias) {
+                                  tensor_t *bias) {                                                            //The Check: It verifies that you have exactly one bias number for every column in your output matrix. If your 
+                                                                                                                 output has 4 columns, you must supply exactly 4 bias values.The "Seed" Secret: Instead of performing matrix 
+                                                                                                                 multiplication and then running a whole new loop to add the bias later, it passes the bias memory directly 
+                                                                                                                 into matmulFloatCore via the seed pointer.Look Back inside matmulFloatCore: If you look closely inside 
+                                                                                                                 matmulFloatCore, the variable that holds the running total (float result) starts at 0.0f only if biasSeed
+                                                                                                                 is empty. If a bias exists, it loads the bias value first:
     const uint8_t *seed = NULL;
     if (bias != NULL) {
         size_t bColumns =
@@ -231,12 +250,12 @@ void matmulSymIntTensorsWithInstructionCounter(tensor_t *aTensor, tensor_t *bTen
     ++matmulInstructionCounter;
 }
 
-void matmulSymInt32Tensors(tensor_t *aTensor, tensor_t *bTensor, tensor_t *outputTensor) {
+void matmulSymInt32Tensors(tensor_t *aTensor, tensor_t *bTensor, tensor_t *outputTensor) {                  
     MATMUL_FUNC_SYM_INT32(aTensor, bTensor, outputTensor);
 }
 
 void matmulSymInt32TensorsWithBias(tensor_t *aTensor, tensor_t *bTensor, tensor_t *outputTensor,
-                                   tensor_t *bias) {
+                                   tensor_t *bias) {                                                        
     if (bias == NULL) {
         matmulIntCore(aTensor, bTensor, outputTensor, NULL);
     } else {
