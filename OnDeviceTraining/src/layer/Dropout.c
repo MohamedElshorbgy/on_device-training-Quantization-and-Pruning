@@ -5,6 +5,7 @@
 
 #include "Dropout.h"
 
+#include "ArithmeticType.h"
 #include "Bernoulli.h"
 #include "Common.h"
 #include "Layer.h"
@@ -28,8 +29,10 @@ void initDropoutConfig(dropoutConfig_t *cfg, float p, tensor_t *mask, quantizati
     cfg->p = p;
     cfg->training = false;
     cfg->mask = mask;
-    cfg->forwardQ = forwardQ;
-    cfg->backwardQ = backwardQ;
+    cfg->forwardMath = arithmeticFromQuantizationOrDefault(forwardQ);
+    cfg->propLossMath = arithmeticFromQuantizationOrDefault(backwardQ);
+    cfg->outputQ = forwardQ;
+    cfg->propLossQ = backwardQ;
     cfg->ownsQuantizations = false;
 }
 
@@ -86,11 +89,11 @@ void dropoutForward(layer_t *dropoutLayer, tensor_t *input, tensor_t *output) {
         }
         bernoulliFillMask(cfg->mask, 1.0f - cfg->p); // §6.0.5: fill once before dtype apply
     }
-    switch (cfg->forwardQ->type) {
-    case FLOAT32:
+    switch (cfg->forwardMath.type) {
+    case ARITH_FLOAT32:
         dropoutForwardFloat(cfg, input, output);
         break;
-    case SYM_INT32:
+    case ARITH_SYM_INT32:
         dropoutForwardSymInt32(cfg, input, output);
         break;
     default:
@@ -136,11 +139,30 @@ void dropoutBackward(layer_t *dropoutLayer, tensor_t *forwardInput, tensor_t *lo
                     maskElements, lossElements);
         exit(1);
     }
-    switch (cfg->backwardQ->type) {
-    case FLOAT32:
+    switch (cfg->propLossMath.type) {
+    case ARITH_FLOAT32:
+        /* Dropout backward bypasses the executeOp funnel and raw-casts loss/propLoss
+         * to float* (forwardInput is unused — the mask + p fully determine dx). Fed a
+         * SYM_INT32 wire, the FLOAT32 arm reads int mantissa codes as floats — silent
+         * garbage grads. Guard the dereferenced wire dtypes and fail fast, mirroring
+         * the LayerNorm/GroupNorm backward guards (#315, #261). */
+        if (loss->quantization->type != FLOAT32 || propLoss->quantization->type != FLOAT32) {
+            PRINT_ERROR("Dropout backward: FLOAT32 arm requires FLOAT32 wires — got loss %d, "
+                        "propLoss %d",
+                        (int)loss->quantization->type, (int)propLoss->quantization->type);
+            exit(1);
+        }
         dropoutBackwardFloat(cfg, loss, propLoss);
         break;
-    case SYM_INT32:
+    case ARITH_SYM_INT32:
+        /* The SYM_INT32 arm raw-casts to int32* and derefs loss/propLoss->qConfig;
+         * a FLOAT32 wire carries qConfig == NULL, so the mismatch is a NULL deref. */
+        if (loss->quantization->type != SYM_INT32 || propLoss->quantization->type != SYM_INT32) {
+            PRINT_ERROR("Dropout backward: SYM_INT32 arm requires SYM_INT32 wires — got loss %d, "
+                        "propLoss %d",
+                        (int)loss->quantization->type, (int)propLoss->quantization->type);
+            exit(1);
+        }
         dropoutBackwardSymInt32(cfg, loss, propLoss);
         break;
     default:

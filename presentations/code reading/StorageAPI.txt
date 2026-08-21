@@ -1,0 +1,78 @@
+#ifndef STORAGEAPI_H
+#define STORAGEAPI_H
+
+#include <stddef.h>
+
+void *reserveMemory(size_t numberOfBytes);
+\\Ask for a block of memory of numberOfBytes size. Returns a pointer to it. This is the project's wrapper around malloc —
+ instead of calling malloc directly everywhere, all code calls reserveMemory.
+
+/* NULL-safe (mirrors free(NULL)). */
+void freeReservedMemory(void *ptr);
+\\Release memory that was previously reserved.
+/* ── MCU SRAM simulation ─────────────────────────────────────────────
+ * Track cumulative heap bytes allocated via reserveMemory().
+ * Compare against STM32 Nucleo-F746ZG limit: 320 KB SRAM.           */
+size_t mcuSimGetTotal(void);
+size_t mcuSimGetPeak (void);
+void   mcuSimPrintStatus(const char *label);
+\\Three functions for MCU simulation explained in the .c file.
+#endif // STORAGEAPI_H
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+
+#define SOURCE_FILE "STORAGE_API"
+
+#include <stdlib.h>
+#include <stdio.h>
+
+#include "StorageApi.h"
+
+/* ── MCU SRAM simulation tracker ─────────────────────────────────────
+ * Counts every reserveMemory() byte so we can compare total heap
+ * usage against the STM32 Nucleo-F746ZG SRAM limit (320 KB).        */
+static size_t g_reserved_total = 0;
+static size_t g_reserved_peak  = 0;
+\\Two static global variables that track memory usage.
+
+static here means they are private to StorageApi.c — no other file can see or touch them directly. They exist for the entire lifetime of the program but are hidden from the outside.
+g_ prefix is a naming convention meaning "global variable".
+g_reserved_total — running total of all bytes ever reserved so far.
+g_reserved_peak — the highest total ever reached at any point in time.
+size_t mcuSimGetTotal(void) { return g_reserved_total; }
+size_t mcuSimGetPeak (void) { return g_reserved_peak;  }
+
+void mcuSimPrintStatus(const char *label)
+{
+    float kb  = (float)g_reserved_total / 1024.0f;
+    float pct = kb / 320.0f * 100.0f;
+    const char *status = (kb > 320.0f) ? "!! OVERFLOW !!"
+                       : (kb > 256.0f) ? "WARNING"
+                       :                 "OK";
+    printf("[MCU-sim] %-34s  heap=%6.1f KB / 320 KB  (%5.1f%%)  [%s]\n",
+           label, (double)kb, (double)pct, status);
+}
+\\It converts g_reserved_total from bytes to KB, calculates what percentage of 320 KB that is, then prints a status line:
+Three status levels:
+
+OK — below 256 KB, safe
+WARNING — between 256 and 320 KB, getting close
+OVERFLOW — above 320 KB, would crash on real hardware
+void *reserveMemory(size_t numberOfBytes) {
+    g_reserved_total += numberOfBytes;
+    if (g_reserved_total > g_reserved_peak)
+        g_reserved_peak = g_reserved_total;
+    return calloc(1, numberOfBytes);
+}
+\\Three things happen:
+
+1. Add numberOfBytes to the running total tracker.
+
+2. If the new total is higher than the previous peak, update the peak. This records the worst-case memory usage across the entire program run.
+
+3. Call calloc(1, numberOfBytes) — allocates the memory and zeroes it. calloc is like malloc but it fills the memory with zeros before returning it,
+ so you never get garbage values by accident.
+void freeReservedMemory(void *ptr) {
+    free(ptr);
+}

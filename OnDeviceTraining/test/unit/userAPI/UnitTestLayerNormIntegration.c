@@ -15,6 +15,7 @@
 #include "LinearApi.h"
 #include "LossFunction.h"
 #include "Optimizer.h"
+#include "OptimizerApi.h"
 #include "Quantization.h"
 #include "QuantizationApi.h"
 #include "SgdApi.h"
@@ -52,10 +53,10 @@ static tensor_t *build2DSym(size_t b, size_t f, const float *data, size_t n) {
     return t;
 }
 
-/* freeOptimSgdM cascades into freeParameter for every registered parameter_t
+/* freeOptim cascades into freeParameter for every registered parameter_t
  * (Linear weights/bias, LayerNorm gamma/beta) — the SAME objects the layers
  * own. The factory frees (freeLinearLayer / freeLayerNormLayer) would call
- * freeParameter again, so after freeOptimSgdM the layers must be torn down
+ * freeParameter again, so after freeOptim the layers must be torn down
  * shell-only. Pattern from UnitTestSgd.c
  * (testSgdZeroGradOnSymInt32GradZeroesMantissasAndResetsScale). Both layers
  * here come from the Borrowing factories (ownsQuantizations=false), so the
@@ -97,7 +98,10 @@ void testLinearLayerNormLinearOneTrainingStep(void) {
     float gammaBefore = ((float *)norm->config->layerNorm->gamma->param->data)[0];
     float betaBefore = ((float *)norm->config->layerNorm->beta->param->data)[0];
 
-    optimizer_t *optim = sgdMCreateOptim(0.1f, 0.9f, 0.0f, model, 3, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *optim =
+        sgdMCreateOptim(0.1f, 0.9f, 0.0f, model, 3, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
 
     trainingStats_t *stats =
         calculateGradsSequential(model, 3, defaultLossConfig(MSE), REDUCTION_MEAN, input, label);
@@ -124,10 +128,11 @@ void testLinearLayerNormLinearOneTrainingStep(void) {
     freeTrainingStats(stats);
     freeTensor(label);
     freeTensor(input);
-    freeOptimSgdM(optim); /* frees w0/b0, gamma/beta, w1/b1 parameter_t */
+    freeOptim(optim); /* frees w0/b0, gamma/beta, w1/b1 parameter_t */
     freeLinearLayerShell(linear1);
     freeLayerNormLayerShell(norm);
     freeLinearLayerShell(linear0);
+    freeQuantization(momentumQ);
     freeQuantization(q);
 
     TEST_ASSERT_TRUE(statsNotNull);
@@ -142,12 +147,11 @@ void testLinearLayerNormLinearOneTrainingStep(void) {
 
 /* Full-SYM single-LayerNorm training step through the public training APIs:
  * calculateGradsSequential (MSE — the only SYM-capable loss backward) + SGD-M
- * step on SYM gamma/beta with SYM grads. Single-layer BY DESIGN: direct SYM
- * Linear->LayerNorm chaining is not intended to work (Linear SYM outputs are
- * accumulator-range mantissas, violating LayerNorm's int16-range input
- * contract); the designed composition inserts explicit Quantization (requant)
- * layers — Linear -> Quant -> LayerNorm -> Quant -> Linear — a follow-up
- * feature (#192; the accumulator-range contract itself is #137).
+ * step on SYM gamma/beta with SYM grads. Single-layer model: LayerNorm sits at
+ * the loss boundary, so there's no downstream layer to feed regardless of
+ * whether its forward wire is producer-restored (PR1b.2) or not — a chained
+ * Quantization layer was never required here even before that migration.
+ * Test behavior unchanged: validates the full SYM end-to-end path.
  * A FLOAT32 twin trained on the same data is the reference; 5e-3 absolute
  * dequant tolerance absorbs input quantization + strategy-A grad noise
  * (PR-0 E2E precedent tolerance). */
@@ -157,10 +161,24 @@ void testLayerNormSymInt32SingleLayerTrainingStep(void) {
     size_t normShape[] = {4};
 
     /* ---- SYM model (under test) ---- */
+    /* PR1c: default grads are FLOAT32; SYM via knob. weightGradStorage/
+     * biasGradStorage opt gamma/beta grads back into SYM_INT32 so this test
+     * keeps exercising the full SYM training step it's named for. */
     layerNormInit_t initSym = {.normalizedShape = normShape, .numNormDims = 1, .eps = 1e-5f};
     quantization_t *symQ = quantizationInitSymInt32(HALF_AWAY);
-    layerQuant_t lqSym = {
-        .forwardMath = symQ, .backwardMath = symQ, .weightStorage = symQ, .biasStorage = symQ};
+    layerQuant_t lqSym = {.forwardMath = arithmeticFromQuantization(symQ),
+                          .propLossMath = arithmeticFromQuantization(symQ),
+                          .outputQ = symQ,
+                          .propLossQ = symQ,
+                          .weightStorage = symQ,
+                          .biasStorage = symQ,
+                          .weightGradStorage = symQ,
+                          .biasGradStorage = symQ,
+                          /* LayerNorm's true hardcode is DYNAMIC_RESCALE for
+                           * BOTH gamma and beta -- see LayerNorm.c
+                           * initLayerNormConfig. */
+                          .weightGradAccMode = OUT_ACC_DYNAMIC_RESCALE,
+                          .biasGradAccMode = OUT_ACC_DYNAMIC_RESCALE};
     layer_t *lnSym = layerNormLayerInit(&initSym, &lqSym);
     layer_t *modelSym[1] = {lnSym};
 
@@ -169,7 +187,10 @@ void testLayerNormSymInt32SingleLayerTrainingStep(void) {
 
     bool gradSymDtype = (lnSym->config->layerNorm->gamma->grad->quantization->type == SYM_INT32);
 
-    optimizer_t *optimSym = sgdMCreateOptim(0.1f, 0.0f, 0.0f, modelSym, 1, SYM_INT32);
+    quantization_t *momentumQSym = quantizationInitFloat();
+    optimizer_t *optimSym =
+        sgdMCreateOptim(0.1f, 0.0f, 0.0f, modelSym, 1, momentumQSym,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
     trainingStats_t *statsSym = calculateGradsSequential(modelSym, 1, defaultLossConfig(MSE),
                                                          REDUCTION_MEAN, inSym, labelSym);
     sgdStepM(optimSym);
@@ -198,7 +219,10 @@ void testLayerNormSymInt32SingleLayerTrainingStep(void) {
     tensor_t *inF = build2DFloat(2, 4, inputVals, 8);
     tensor_t *labelF = build2DFloat(2, 4, labelVals, 8);
 
-    optimizer_t *optimF = sgdMCreateOptim(0.1f, 0.0f, 0.0f, modelF, 1, FLOAT32);
+    quantization_t *momentumQF = quantizationInitFloat();
+    optimizer_t *optimF =
+        sgdMCreateOptim(0.1f, 0.0f, 0.0f, modelF, 1, momentumQF,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
     trainingStats_t *statsF =
         calculateGradsSequential(modelF, 1, defaultLossConfig(MSE), REDUCTION_MEAN, inF, labelF);
     sgdStepM(optimF);
@@ -215,16 +239,19 @@ void testLayerNormSymInt32SingleLayerTrainingStep(void) {
     freeTensor(inF);
     freeTensor(labelSym);
     freeTensor(inSym);
-    freeOptimSgdM(optimF); /* frees gamma/beta parameter_t of the float twin */
-    freeOptimSgdM(optimSym);
+    freeOptim(optimF); /* frees gamma/beta parameter_t of the float twin */
+    freeOptim(optimSym);
     freeLayerNormLayerShell(lnF);
     freeLayerNormLayerShell(lnSym);
+    freeQuantization(momentumQF);
+    freeQuantization(momentumQSym);
     freeQuantization(fQ);
     freeQuantization(symQ);
 
     TEST_ASSERT_TRUE(symStatsNotNull);
     TEST_ASSERT_TRUE_MESSAGE(isfinite(symLoss), "SYM loss must be finite");
-    TEST_ASSERT_TRUE_MESSAGE(gradSymDtype, "factory must produce SYM_INT32 grads");
+    TEST_ASSERT_TRUE_MESSAGE(
+        gradSymDtype, "explicit weightGradStorage/biasGradStorage knob must yield SYM_INT32 grads");
     for (size_t i = 0; i < 4; i++) {
         /* gamma init 1.0 / beta init 0.0: both twins must move, and the SYM
          * twin must land near the float twin. */

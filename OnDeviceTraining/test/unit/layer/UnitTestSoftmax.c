@@ -1,5 +1,6 @@
 #include <stdlib.h>
 
+#include "ArithmeticType.h"
 #include "LayerQuant.h"
 #include "QuantizationApi.h"
 #include "Softmax.h"
@@ -36,7 +37,9 @@ void unitTestSoftmaxForwardFloat() {
 
     /* 3. Build the layer with shared float quantization. */
     quantization_t *floatQ = quantizationInitFloat();
-    layer_t *softmaxLayer = softmaxLayerInitLegacy(floatQ, floatQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, floatQ);
+    layer_t *softmaxLayer = softmaxLayerInit(&lq);
     layerFunctions_t softmaxFns = layerFunctions[SOFTMAX];
     softmaxFns.forward(softmaxLayer, input, output);
 
@@ -47,7 +50,7 @@ void unitTestSoftmaxForwardFloat() {
     }
 
     /* 5. FREE. */
-    freeSoftmaxLayerLegacy(softmaxLayer);
+    freeSoftmaxLayer(softmaxLayer);
     freeTensor(output);
     freeTensor(input);
     freeQuantization(floatQ);
@@ -86,7 +89,9 @@ void unitTestSoftmaxForwardSymInt32() {
 
     /* 3. Shared SymInt32 quantization for the layer. */
     quantization_t *symIntQ = quantizationInitSymInt32(HALF_AWAY);
-    layer_t *softmaxLayer = softmaxLayerInitLegacy(symIntQ, symIntQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, symIntQ);
+    layer_t *softmaxLayer = softmaxLayerInit(&lq);
     layerFunctions_t softmaxFns = layerFunctions[SOFTMAX];
     softmaxFns.forward(softmaxLayer, input, output);
 
@@ -109,7 +114,7 @@ void unitTestSoftmaxForwardSymInt32() {
 
     /* 6. FREE. */
     freeTensor(outputFloat);
-    freeSoftmaxLayerLegacy(softmaxLayer);
+    freeSoftmaxLayer(softmaxLayer);
     freeTensor(output);
     freeTensor(input);
     freeQuantization(symIntQ);
@@ -161,7 +166,9 @@ void unitTestSoftmaxBackwardFloat() {
 
     /* 4. Build layer. */
     quantization_t *floatQ = quantizationInitFloat();
-    layer_t *softmaxLayer = softmaxLayerInitLegacy(floatQ, floatQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, floatQ);
+    layer_t *softmaxLayer = softmaxLayerInit(&lq);
     layerFunctions_t softmaxFns = layerFunctions[SOFTMAX];
     softmaxFns.backward(softmaxLayer, input, loss, propLoss);
 
@@ -172,7 +179,7 @@ void unitTestSoftmaxBackwardFloat() {
     }
 
     /* 6. FREE. */
-    freeSoftmaxLayerLegacy(softmaxLayer);
+    freeSoftmaxLayer(softmaxLayer);
     freeTensor(propLoss);
     freeTensor(loss);
     freeTensor(input);
@@ -225,7 +232,9 @@ void unitTestSoftmaxBackwardSymInt32() {
 
     /* 4. Build layer. */
     quantization_t *symIntQ = quantizationInitSymInt32(HALF_AWAY);
-    layer_t *softmaxLayer = softmaxLayerInitLegacy(symIntQ, symIntQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, symIntQ);
+    layer_t *softmaxLayer = softmaxLayerInit(&lq);
     layerFunctions_t softmaxFns = layerFunctions[SOFTMAX];
     softmaxFns.backward(softmaxLayer, input, loss, propLoss);
 
@@ -248,7 +257,7 @@ void unitTestSoftmaxBackwardSymInt32() {
 
     /* 7. FREE. */
     freeTensor(propLossFloat);
-    freeSoftmaxLayerLegacy(softmaxLayer);
+    freeSoftmaxLayer(softmaxLayer);
     freeTensor(propLoss);
     freeTensor(loss);
     freeTensor(input);
@@ -262,6 +271,113 @@ void unitTestSoftmaxBackwardSymInt32() {
     }
 }
 
+/* Large-logit regression fixture (#201 closure residual, folded into #206):
+ * pins the shared funnel kernel's max-subtraction. UnitTestSoftmax's other
+ * fixtures keep logits in [-6, 5], where deleting the stabilization still
+ * passes every assertion; at logits ~90 an unstabilized expf(90) overflows to
+ * inf and the outputs collapse to NaN — the WITHIN asserts below fail on NaN.
+ * Analytic reference: max=90 -> exps [1, e^-1, e^-89], p = [0.73106, 0.26894,
+ * ~1.6e-39]. */
+void testSoftmaxForwardLargeLogitsStaysFinite(void) {
+    size_t *inputDims = reserveMemory(2 * sizeof(size_t));
+    inputDims[0] = 1;
+    inputDims[1] = 3;
+    size_t *inputOrder = reserveMemory(2 * sizeof(size_t));
+    setOrderOfDimsForNewTensor(2, inputOrder);
+    shape_t *inputShape = reserveMemory(sizeof(shape_t));
+    setShape(inputShape, inputDims, 2, inputOrder);
+    tensor_t *input = initTensor(inputShape, quantizationInitFloat(), NULL);
+    tensorFillFromFloatBuffer(input, (float[]){90.f, 89.f, 1.f}, 3);
+
+    size_t *outputDims = reserveMemory(2 * sizeof(size_t));
+    outputDims[0] = 1;
+    outputDims[1] = 3;
+    size_t *outputOrder = reserveMemory(2 * sizeof(size_t));
+    setOrderOfDimsForNewTensor(2, outputOrder);
+    shape_t *outputShape = reserveMemory(sizeof(shape_t));
+    setShape(outputShape, outputDims, 2, outputOrder);
+    tensor_t *output = initTensor(outputShape, quantizationInitFloat(), NULL);
+
+    quantization_t *floatQ = quantizationInitFloat();
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, floatQ);
+    layer_t *softmaxLayer = softmaxLayerInit(&lq);
+    layerFunctions[SOFTMAX].forward(softmaxLayer, input, output);
+
+    float captured[3];
+    for (size_t i = 0; i < 3; i++) {
+        captured[i] = ((float *)output->data)[i];
+    }
+
+    freeSoftmaxLayer(softmaxLayer);
+    freeTensor(output);
+    freeTensor(input);
+    freeQuantization(floatQ);
+
+    float expected[] = {0.73106f, 0.26894f, 0.0f};
+    for (size_t i = 0; i < 3; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(1e-4f, expected[i], captured[i]);
+    }
+}
+
+/* SYM_INT32 twin: the int12 scale (90/2047 ~ 0.044) accommodates the logit;
+ * the funnel prologue dequantizes, the stabilized kernel runs, the epilogue
+ * requantizes. Tolerance 0.02 covers the input-quantization shift of the
+ * logit gap (<= ~0.009 on p0) — an unstabilized kernel still lands at
+ * NaN/garbage, far outside it. */
+void testSoftmaxForwardSymLargeLogitsStaysFinite(void) {
+    size_t *inputDims = reserveMemory(2 * sizeof(size_t));
+    inputDims[0] = 1;
+    inputDims[1] = 3;
+    size_t *inputOrder = reserveMemory(2 * sizeof(size_t));
+    setOrderOfDimsForNewTensor(2, inputOrder);
+    shape_t *inputShape = reserveMemory(sizeof(shape_t));
+    setShape(inputShape, inputDims, 2, inputOrder);
+    tensor_t *input = initTensor(inputShape, quantizationInitSymInt32(HALF_AWAY), NULL);
+    tensorFillFromFloatBuffer(input, (float[]){90.f, 89.f, 1.f}, 3);
+
+    size_t *outputDims = reserveMemory(2 * sizeof(size_t));
+    outputDims[0] = 1;
+    outputDims[1] = 3;
+    size_t *outputOrder = reserveMemory(2 * sizeof(size_t));
+    setOrderOfDimsForNewTensor(2, outputOrder);
+    shape_t *outputShape = reserveMemory(sizeof(shape_t));
+    setShape(outputShape, outputDims, 2, outputOrder);
+    tensor_t *output = initTensor(outputShape, quantizationInitSymInt32(HALF_AWAY), NULL);
+
+    quantization_t *symIntQ = quantizationInitSymInt32(HALF_AWAY);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, symIntQ);
+    layer_t *softmaxLayer = softmaxLayerInit(&lq);
+    layerFunctions[SOFTMAX].forward(softmaxLayer, input, output);
+
+    size_t *outFloatDims = reserveMemory(2 * sizeof(size_t));
+    outFloatDims[0] = 1;
+    outFloatDims[1] = 3;
+    size_t *outFloatOrder = reserveMemory(2 * sizeof(size_t));
+    setOrderOfDimsForNewTensor(2, outFloatOrder);
+    shape_t *outFloatShape = reserveMemory(sizeof(shape_t));
+    setShape(outFloatShape, outFloatDims, 2, outFloatOrder);
+    tensor_t *outputFloat = initTensor(outFloatShape, quantizationInitFloat(), NULL);
+    convertTensor(output, outputFloat);
+
+    float captured[3];
+    for (size_t i = 0; i < 3; i++) {
+        captured[i] = ((float *)outputFloat->data)[i];
+    }
+
+    freeTensor(outputFloat);
+    freeSoftmaxLayer(softmaxLayer);
+    freeTensor(output);
+    freeTensor(input);
+    freeQuantization(symIntQ);
+
+    float expected[] = {0.73106f, 0.26894f, 0.0f};
+    for (size_t i = 0; i < 3; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(0.02f, expected[i], captured[i]);
+    }
+}
+
 void testSoftmaxLayerInitAndFreeRoundTrip(void) {
     /* Roundtrip: softmaxLayerInit allocates layer + outer layerConfig +
      * inner softmaxConfig (3 reserveMemory calls). freeSoftmaxLayer must
@@ -269,13 +385,15 @@ void testSoftmaxLayerInitAndFreeRoundTrip(void) {
      * sweep — this test asserts only that the round-trip completes
      * without a crash and that the layer was wired correctly. */
     quantization_t *floatQ = quantizationInitFloat();
-    layer_t *softmaxLayer = softmaxLayerInitLegacy(floatQ, floatQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, floatQ);
+    layer_t *softmaxLayer = softmaxLayerInit(&lq);
     TEST_ASSERT_NOT_NULL(softmaxLayer);
     TEST_ASSERT_EQUAL_INT(SOFTMAX, softmaxLayer->type);
     TEST_ASSERT_NOT_NULL(softmaxLayer->config);
     TEST_ASSERT_NOT_NULL(softmaxLayer->config->softmax);
 
-    freeSoftmaxLayerLegacy(softmaxLayer);
+    freeSoftmaxLayer(softmaxLayer);
 
     /* floatQ is owned by the test; freeSoftmaxLayer must not have freed
      * it (quantization configs are externally owned and shared). */
@@ -290,8 +408,10 @@ void testSoftmaxLayerInitBorrowingStoresLqPointers(void) {
     quantization_t *qFwd = quantizationInitFloat();
     quantization_t *qBwd = quantizationInitFloat();
     layerQuant_t lq = {
-        .forwardMath = qFwd,
-        .backwardMath = qBwd,
+        .forwardMath = arithmeticFromQuantization(qFwd),
+        .propLossMath = arithmeticFromQuantization(qBwd),
+        .outputQ = qFwd,
+        .propLossQ = qBwd,
     };
 
     layer_t *layer = softmaxLayerInit(&lq);
@@ -300,8 +420,10 @@ void testSoftmaxLayerInitBorrowingStoresLqPointers(void) {
     TEST_ASSERT_EQUAL_INT(SOFTMAX, layer->type);
 
     softmaxConfig_t *cfg = layer->config->softmax;
-    TEST_ASSERT_EQUAL_PTR(qFwd, cfg->forwardQ);
-    TEST_ASSERT_EQUAL_PTR(qBwd, cfg->backwardQ);
+    TEST_ASSERT_EQUAL_PTR(qFwd, cfg->outputQ);
+    TEST_ASSERT_EQUAL_PTR(qBwd, cfg->propLossQ);
+    TEST_ASSERT_EQUAL_INT(ARITH_FLOAT32, cfg->forwardMath.type);
+    TEST_ASSERT_EQUAL_INT(ARITH_FLOAT32, cfg->propLossMath.type);
     TEST_ASSERT_FALSE(cfg->ownsQuantizations);
 
     freeSoftmaxLayer(layer);
@@ -313,16 +435,19 @@ void testSoftmaxLayerInitOwningDeepCopiesLqPointers(void) {
     quantization_t *qFwd = quantizationInitFloat();
     quantization_t *qBwd = quantizationInitFloat();
     layerQuant_t lq = {
-        .forwardMath = qFwd,
-        .backwardMath = qBwd,
+        .forwardMath = arithmeticFromQuantization(qFwd),
+        .propLossMath = arithmeticFromQuantization(qBwd),
+        .outputQ = qFwd,
+        .propLossQ = qBwd,
     };
 
     layer_t *layer = softmaxLayerInitOwning(&lq);
 
     softmaxConfig_t *cfg = layer->config->softmax;
-    TEST_ASSERT_NOT_EQUAL(qFwd, cfg->forwardQ);
-    TEST_ASSERT_NOT_EQUAL(qBwd, cfg->backwardQ);
-    TEST_ASSERT_EQUAL_INT(qFwd->type, cfg->forwardQ->type);
+    TEST_ASSERT_NOT_EQUAL(qFwd, cfg->outputQ);
+    TEST_ASSERT_NOT_EQUAL(qBwd, cfg->propLossQ);
+    TEST_ASSERT_EQUAL_INT(qFwd->type, cfg->outputQ->type);
+    TEST_ASSERT_EQUAL_INT(ARITH_FLOAT32, cfg->forwardMath.type);
     TEST_ASSERT_TRUE(cfg->ownsQuantizations);
 
     freeSoftmaxLayer(layer);
@@ -341,6 +466,8 @@ int main() {
     RUN_TEST(unitTestSoftmaxBackwardFloat);
     RUN_TEST(unitTestSoftmaxBackwardSymInt32);
 
+    RUN_TEST(testSoftmaxForwardLargeLogitsStaysFinite);
+    RUN_TEST(testSoftmaxForwardSymLargeLogitsStaysFinite);
     RUN_TEST(testSoftmaxLayerInitAndFreeRoundTrip);
     RUN_TEST(testSoftmaxLayerInitBorrowingStoresLqPointers);
     RUN_TEST(testSoftmaxLayerInitOwningDeepCopiesLqPointers);

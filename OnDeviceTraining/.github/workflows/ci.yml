@@ -6,8 +6,48 @@ on:
   pull_request:
     branches: [main, develop]
 
+# Least privilege: every job only reads the repo (build/test/cache; nothing
+# pushes, comments, or releases). Widen per-job if a future job needs more.
+permissions:
+  contents: read
+
 jobs:
+  # develop and main are both push- and PR-targets, so a commit landing on
+  # develop while a develop->main release PR is open fires push AND
+  # pull_request for the identical SHA (surfaced by #320/#324): the push
+  # run would re-verify a commit the open PR's own pull_request run already
+  # covers. Skip (not cancel) the redundant push run before any real job
+  # starts, so duplicates show a clean "skipped" rather than a cancelled/
+  # failed-looking check.
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+
+    steps:
+      - name: Skip push runs already covered by an open PR's checks
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          proceed=true
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # Fail open: if the PR lookup itself errors (API hiccup), dup=0 and
+            # this run proceeds normally rather than the gate job going red.
+            dup=$(gh pr list --repo "${{ github.repository }}" --state open --limit 100 \
+              --json headRefOid --jq "[.[] | select(.headRefOid == \"${{ github.sha }}\")] | length") || dup=0
+            if [ "$dup" -gt 0 ]; then
+              echo "Commit ${{ github.sha }} is already the head of an open PR; that PR's pull_request-triggered run covers this commit."
+              proceed=false
+            fi
+          fi
+          echo "proceed=$proceed" >> "$GITHUB_OUTPUT"
+
   alloc-locality:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -32,6 +72,8 @@ jobs:
           fi
 
   c-format-check:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -46,10 +88,12 @@ jobs:
 
       - name: Check format
         run: |
-          find src test example \( -name '*.c' -o -name '*.h' \) -print0 | \
+          find src test examples \( -name '*.c' -o -name '*.h' \) -print0 | \
             xargs -0 clang-format-21 --dry-run -Werror
 
   c-build-and-test:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -57,6 +101,16 @@ jobs:
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build gcc
+
+      - name: Assert pinned toolchain (gcc major 13)
+        run: |
+          gcc --version | head -1
+          cmake --version | head -1
+          major=$(gcc -dumpversion | cut -d. -f1)
+          if [ "$major" != "13" ]; then
+            echo "::error::CI gcc major is ${major}, expected 13. Gold tolerances are toolchain-sensitive (FMA contraction); a runner/toolchain bump must be a deliberate re-baseline, never an accident. See docs/conventions/toolchain-parity.md — do NOT loosen tolerances to make golds pass."
+            exit 1
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -77,6 +131,8 @@ jobs:
         run: ctest --preset unit_test
 
   c-asan-build-and-test:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -104,6 +160,8 @@ jobs:
         run: ctest --preset unit_test_asan
 
   c-ubsan-build-and-test:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -131,6 +189,8 @@ jobs:
         run: ctest --preset unit_test_ubsan
 
   c-bit-parity:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -138,6 +198,16 @@ jobs:
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build gcc
+
+      - name: Assert pinned toolchain (gcc major 13)
+        run: |
+          gcc --version | head -1
+          cmake --version | head -1
+          major=$(gcc -dumpversion | cut -d. -f1)
+          if [ "$major" != "13" ]; then
+            echo "::error::CI gcc major is ${major}, expected 13. Gold tolerances are toolchain-sensitive (FMA contraction); a runner/toolchain bump must be a deliberate re-baseline, never an accident. See docs/conventions/toolchain-parity.md — do NOT loosen tolerances to make golds pass."
+            exit 1
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -159,7 +229,15 @@ jobs:
           path: |
             examples/har_classifier/data/raw
             examples/ecg_anomaly_ae/data/raw
-          key: datasets-raw-${{ hashFiles('examples/har_classifier/prepare_data.py', 'examples/ecg_anomaly_ae/prepare_data.py') }}
+            examples/mnist_mlp/data/raw
+            examples/mnist_cnn/data/raw
+          key: datasets-raw-${{ hashFiles('examples/har_classifier/prepare_data.py', 'examples/ecg_anomaly_ae/prepare_data.py', 'examples/mnist_mlp/prepare_data.py', 'examples/mnist_cnn/prepare_data.py') }}
+
+      - name: Cache SpeechCommands raw download (shared, ~2.3 GB)
+        uses: actions/cache@v4
+        with:
+          path: examples/_shared/data/speech_commands
+          key: speechcommands-raw-${{ hashFiles('examples/_shared/speechcommands_data.py') }}
 
       - name: Prepare HAR data
         run: uv run examples/har_classifier/prepare_data.py
@@ -173,37 +251,303 @@ jobs:
       - name: Train PyTorch ECG (produces reference reconstructions + weights)
         run: uv run examples/ecg_anomaly_ae/train_pytorch.py
 
+      - name: Prepare MNIST MLP data
+        run: uv run examples/mnist_mlp/prepare_data.py
+
+      - name: Train PyTorch MNIST MLP (produces reference predictions + weights)
+        run: uv run examples/mnist_mlp/train_pytorch.py
+
+      - name: Prepare MNIST CNN data
+        run: uv run examples/mnist_cnn/prepare_data.py
+
+      - name: Train PyTorch MNIST CNN (produces reference predictions + weights)
+        run: uv run examples/mnist_cnn/train_pytorch.py
+
+      - name: Cache kws_mfcc processed data (6-class)
+        id: kws-mfcc-cache
+        uses: actions/cache@v4
+        with:
+          path: examples/kws_mfcc/data/6class
+          key: kws-mfcc-6class-${{ hashFiles('examples/kws_mfcc/prepare_data.py', 'examples/_shared/speechcommands_data.py') }}
+
+      - name: Prepare kws_mfcc data (6-class; only on cache miss)
+        if: steps.kws-mfcc-cache.outputs.cache-hit != 'true'
+        run: uv run examples/kws_mfcc/prepare_data.py
+
+      - name: Train PyTorch kws_mfcc (produces reference predictions + weights)
+        run: uv run examples/kws_mfcc/train_pytorch.py
+
+      - name: Cache kws_raw processed data (6-class)
+        id: kws-raw-cache
+        uses: actions/cache@v4
+        with:
+          path: examples/kws_raw/data/6class
+          key: kws-raw-6class-${{ hashFiles('examples/kws_raw/prepare_data.py', 'examples/_shared/speechcommands_data.py') }}
+
+      - name: Prepare kws_raw data (6-class; only on cache miss)
+        if: steps.kws-raw-cache.outputs.cache-hit != 'true'
+        run: uv run examples/kws_raw/prepare_data.py
+
+      - name: Train PyTorch kws_raw (produces reference predictions + weights)
+        run: uv run examples/kws_raw/train_pytorch.py
+
       - name: Configure
         run: cmake --preset examples
 
-      - name: Build v2 binaries
-        run: |
-          cmake --build --preset examples --target train_c_har_classifier_v2
-          cmake --build --preset examples --target train_c_ecg_anomaly_ae_v2
+      - name: Build ALL example binaries (rot guard — any broken example fails CI)
+        # Builds the default `all` target so every example executable is compiled,
+        # not just the two run below. Closes the gap that let example/MnistExperiment
+        # (#235) and the legacy v1 trainers silently rot — nothing built them.
+        run: cmake --build --preset examples
 
-      - name: Run HAR v2 in BIT_PARITY mode
-        run: BIT_PARITY=1 build/examples/examples/har_classifier_v2/train_c_har_classifier_v2
+      - name: Run mixed_width_mlp acceptance example (per-op arithmetic + declared-width storage)
+        # Does NOT join bit-parity: mixed SYM_INT32/FLOAT32 wires have no PyTorch
+        # twin (SYM divergence is by design). The binary's own in-process hard
+        # gates (storage/wire dtypes + a loss-decrease sanity check) are the
+        # acceptance criteria; a non-zero exit fails this step.
+        run: build/examples/examples/mixed_width_mlp/train_c_mixed_width_mlp
 
-      - name: Run ECG v2 in BIT_PARITY mode
-        run: BIT_PARITY=1 build/examples/examples/ecg_anomaly_ae_v2/train_c_ecg_anomaly_ae_v2
+      - name: Run HAR in BIT_PARITY mode
+        run: BIT_PARITY=1 build/examples/examples/har_classifier/train_c_har_classifier
+
+      - name: Run ECG in BIT_PARITY mode
+        run: BIT_PARITY=1 build/examples/examples/ecg_anomaly_ae/train_c_ecg_anomaly_ae
 
       - name: Diff HAR predictions (int32, exact match required)
         run: |
           uv run examples/_shared/compare_predictions.py \
             --pytorch examples/har_classifier/outputs/pytorch_predictions.npy \
-            --c examples/har_classifier_v2/outputs/c_predictions.npy \
+            --c examples/har_classifier/outputs/c_predictions.npy \
             --dtype int32
 
       - name: Diff ECG reconstructions (float32, allclose)
         run: |
           uv run examples/_shared/compare_predictions.py \
             --pytorch examples/ecg_anomaly_ae/outputs/pytorch_reconstructions.npy \
-            --c examples/ecg_anomaly_ae_v2/outputs/c_reconstructions.npy \
+            --c examples/ecg_anomaly_ae/outputs/c_reconstructions.npy \
             --dtype float32 \
             --rtol 1e-4 \
             --atol 1e-5
 
+      - name: Run MNIST MLP in BIT_PARITY mode
+        run: BIT_PARITY=1 build/examples/examples/mnist_mlp/train_c_mnist_mlp
+
+      - name: Diff MNIST MLP predictions (int32, exact match required)
+        run: |
+          uv run examples/_shared/compare_predictions.py \
+            --pytorch examples/mnist_mlp/outputs/pytorch_predictions.npy \
+            --c examples/mnist_mlp/outputs/c_predictions.npy \
+            --dtype int32
+
+      - name: Run MNIST CNN in BIT_PARITY mode
+        run: BIT_PARITY=1 build/examples/examples/mnist_cnn/train_c_mnist_cnn
+
+      - name: Diff MNIST CNN predictions (int32, exact match required)
+        run: |
+          uv run examples/_shared/compare_predictions.py \
+            --pytorch examples/mnist_cnn/outputs/pytorch_predictions.npy \
+            --c examples/mnist_cnn/outputs/c_predictions.npy \
+            --dtype int32
+
+      - name: Run kws_mfcc in BIT_PARITY mode
+        run: BIT_PARITY=1 build/examples/examples/kws_mfcc/train_c_kws_mfcc
+
+      - name: Diff kws_mfcc predictions (int32, exact match required)
+        run: |
+          uv run examples/_shared/compare_predictions.py \
+            --pytorch examples/kws_mfcc/outputs/6class/pytorch_predictions.npy \
+            --c examples/kws_mfcc/outputs/6class/c_predictions.npy \
+            --dtype int32
+
+      - name: Run kws_raw in BIT_PARITY mode
+        run: BIT_PARITY=1 build/examples/examples/kws_raw/train_c_kws_raw
+
+      - name: Diff kws_raw predictions (int32, exact match required)
+        run: |
+          uv run examples/_shared/compare_predictions.py \
+            --pytorch examples/kws_raw/outputs/6class/pytorch_predictions.npy \
+            --c examples/kws_raw/outputs/6class/c_predictions.npy \
+            --dtype int32
+
+      # Re-splits the HAR raw data (already restored/prepared above by the
+      # "Cache raw datasets" + "Prepare HAR data" steps) into T=5 sequential
+      # domains by subject. No network access -- fails fast if data/raw is
+      # missing.
+      - name: Prepare HAR domain splits (continual)
+        run: uv run examples/har_classifier/prepare_domains.py
+
+      # Machinery smoke test for the #326 continual-learning demo: single
+      # seed, 2 domains, 1 epoch each -- proves the PPCA-replay pipeline
+      # runs end-to-end, emits schema-valid JSON, and keeps replay memory
+      # footprint constant across domains. Deliberately NOT a BWT/accuracy
+      # gate (single seed is stochastic; see spec §9) -- the 10-seed
+      # continual-learning study is a separate, non-CI artifact.
+      - name: Continual-learning mini-gate (machinery smoke, no BWT threshold)
+        run: |
+          DOMAINS=2 PRETRAIN_EPOCHS=1 EPOCHS_PER_DOMAIN=1 RANK=4 REPLAY=1 \
+            LOG_PATH=continual_smoke.json \
+            build/examples/examples/har_classifier/train_c_continual
+          uv run - <<'PY'
+          import json
+          log = json.load(open("continual_smoke.json"))
+          rows = log["accuracy_matrix"]
+          assert len(rows) == 2 and len(rows[1]) == 2, rows
+          assert log["replay"]["enabled"] == 1
+          assert log["replay"]["footprint_constant"] is True
+          assert log["replay"]["bytes_per_class"] > 0
+          print("continual mini-gate OK")
+          PY
+
+  # Compile-only ARM cross-build of the core src/ libraries. Surfaces the
+  # 32-bit-size_t bug class (e.g. 1<<32 shift UB, PR #297) and newlib
+  # behaviors (#160) that are structurally invisible on the LP64 host jobs.
+  # Toolchain = Arm GNU 13.3.Rel1, exactly the devenv gcc-arm-embedded-13
+  # version. Deliberately NON-required for now; propose making it required
+  # once it has been stable for a few weeks.
+  c-arm-cross-compile:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cmake + ninja
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build
+
+      - name: Cache Arm GNU toolchain 13.3.Rel1
+        id: arm-gcc-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/arm-gnu-toolchain
+          key: arm-gnu-toolchain-13.3.rel1-x86_64
+
+      - name: Install Arm GNU toolchain 13.3.Rel1 (matches devenv gcc-arm-embedded-13)
+        if: steps.arm-gcc-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o /tmp/arm-gnu.tar.xz \
+            "https://developer.arm.com/-/media/Files/downloads/gnu/13.3.rel1/binrel/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi.tar.xz"
+          # Pinned from Arm's official .sha256asc for 13.3.rel1 (fetched 2026-07-08);
+          # supply-chain guard: fail before extracting a tampered tarball.
+          echo "95c011cee430e64dd6087c75c800f04b9c49832cc1000127a92a97f9c8d83af4  /tmp/arm-gnu.tar.xz" | sha256sum -c -
+          mkdir -p ~/arm-gnu-toolchain
+          tar -xJf /tmp/arm-gnu.tar.xz -C ~/arm-gnu-toolchain --strip-components=1
+
+      - name: Assert toolchain version
+        run: |
+          export PATH="$HOME/arm-gnu-toolchain/bin:$PATH"
+          arm-none-eabi-gcc --version | head -1
+          major=$(arm-none-eabi-gcc -dumpversion | cut -d. -f1)
+          if [ "$major" != "13" ]; then
+            echo "::error::arm-none-eabi-gcc major is ${major}, expected 13 (devenv parity)."
+            exit 1
+          fi
+
+      - name: Configure (arm_cross preset)
+        run: |
+          export PATH="$HOME/arm-gnu-toolchain/bin:$PATH"
+          cmake --preset arm_cross
+
+      - name: Cross-compile core libraries (compile-only, -Werror)
+        run: |
+          export PATH="$HOME/arm-gnu-toolchain/bin:$PATH"
+          cmake --build --preset arm_cross
+
+  # Portability-FLOOR cross-build (#352): the oldest arm-gcc we support.
+  # The 13.3 parity job above ACCEPTS pre-C23 constructs (e.g. a declaration
+  # placed directly after a `case`/`default` label) silently, as a C23
+  # extension -- so it is structurally blind to code that will not compile on
+  # the gcc 10.x lines still shipped by many vendor MCU SDKs. arm-gcc 10.x
+  # HARD-ERRORS that whole class by default ("a label can only be part of a
+  # statement"), with no flag needed and no false positives -- it is literally
+  # the toolchain that surfaced #352. Ubuntu 22.04's apt gcc-arm-none-eabi is
+  # the 10.3 line; the compiler and the newlib headers ship as separate
+  # packages, and a compile-only build still needs the headers. Deliberately
+  # NON-required, like the parity job.
+  c-arm-cross-compile-min:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cmake + ninja + oldest-supported arm-gcc (10.x)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi
+
+      - name: Assert portability floor (arm-gcc major 10)
+        run: |
+          arm-none-eabi-gcc --version | head -1
+          major=$(arm-none-eabi-gcc -dumpversion | cut -d. -f1)
+          if [ "$major" != "10" ]; then
+            echo "::error::apt arm-none-eabi-gcc major is ${major}, expected 10 (the pre-C23 portability floor this job exists to guard). If the runner image bumped the package, re-pin the floor deliberately -- do not just widen this check."
+            exit 1
+          fi
+
+      - name: Configure (arm_cross preset)
+        run: cmake --preset arm_cross
+
+      - name: Cross-compile core libraries (compile-only, -Werror)
+        run: cmake --build --preset arm_cross
+
+  # Stage-1 stack-watermark REPORT (hardening item 6): builds the two
+  # instrumented har_classifier trainers with ODT_MEM_PROFILE, runs one
+  # epoch each, and reports memory.stack_peak_b against the budgets in
+  # examples/_shared/check_stack_watermark.py. WARN-ONLY by design: linux
+  # budgets are uncalibrated until this job has produced stable peaks;
+  # calibration + --enforce promotion is a dedicated later PR.
+  c-stack-watermark:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build gcc
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync Python deps
+        run: uv sync
+
+      - name: Cache raw HAR dataset
+        uses: actions/cache@v4
+        with:
+          path: examples/har_classifier/data/raw
+          key: datasets-raw-${{ hashFiles('examples/har_classifier/prepare_data.py', 'examples/ecg_anomaly_ae/prepare_data.py', 'examples/mnist_mlp/prepare_data.py', 'examples/mnist_cnn/prepare_data.py') }}
+
+      - name: Prepare HAR data
+        run: uv run examples/har_classifier/prepare_data.py
+
+      - name: Configure (examples_memprofile preset)
+        run: cmake --preset examples_memprofile
+
+      - name: Build instrumented HAR trainers
+        run: cmake --build --preset examples_memprofile --target train_c_har_classifier train_c_har_classifier_sym train_c_har_classifier_adamw
+
+      - name: Run 1-epoch watermark probes
+        run: |
+          EPOCHS=1 SEED=1 LOG_PATH=/tmp/wm_float.json \
+            build/examples_memprofile/examples/har_classifier/train_c_har_classifier
+          EPOCHS=1 SEED=1 SYM_BITS=8 LOG_PATH=/tmp/wm_sym8.json \
+            build/examples_memprofile/examples/har_classifier/train_c_har_classifier_sym
+          EPOCHS=1 SEED=1 LOG_PATH=/tmp/wm_adamw.json \
+            build/examples_memprofile/examples/har_classifier/train_c_har_classifier_adamw
+
+      - name: Check stack watermarks (report-only)
+        run: uv run examples/_shared/check_stack_watermark.py --platform linux /tmp/wm_float.json /tmp/wm_sym8.json /tmp/wm_adamw.json
+
   python-test:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
 
     steps:

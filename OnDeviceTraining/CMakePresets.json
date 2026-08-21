@@ -15,7 +15,10 @@
     {
       "name": "host",
       "hidden": true,
-      "inherits": "gen_ninja"
+      "inherits": "gen_ninja",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-ffp-contract=fast"
+      }
     },
     {
       "name": "unit_test",
@@ -43,7 +46,9 @@
       "displayName": "Unit-Test-Debug",
       "inherits": "host",
       "cacheVariables": {
-        "DEBUG_MODE_DEBUG": "ON"
+        "DEBUG_MODE_DEBUG": "ON",
+        "ODT_MEM_PROFILE": "ON",
+        "ODT_TRACK_INSTRUCTIONS": "ON"
       }
     },
     {
@@ -52,7 +57,9 @@
       "inherits": "host",
       "cacheVariables": {
         "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-sanitize=function -fno-omit-frame-pointer -fno-sanitize-recover=all -g -O1",
-        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "ODT_MEM_PROFILE": "ON",
+        "ODT_TRACK_INSTRUCTIONS": "ON"
       }
     },
     {
@@ -70,6 +77,26 @@
       "inherits": "host",
       "cacheVariables": {
         "BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "examples_memprofile",
+      "displayName": "Examples + memory profiling (ODT_MEM_PROFILE=ON)",
+      "inherits": "host",
+      "cacheVariables": {
+        "BUILD_EXAMPLES": "ON",
+        "ODT_MEM_PROFILE": "ON"
+      }
+    },
+    {
+      "name": "arm_cross",
+      "displayName": "ARM cross-compile (compile-only, core libs)",
+      "inherits": "gen_ninja",
+      "toolchainFile": "${sourceDir}/cmake/arm-none-eabi.cmake",
+      "cacheVariables": {
+        "HOST": "OFF",
+        "ODT_BUILD_TESTS": "OFF",
+        "CMAKE_C_FLAGS": "-Werror"
       }
     }
   ],
@@ -119,6 +146,28 @@
     {
       "name": "examples",
       "configurePreset": "examples"
+    },
+    {
+      "name": "examples_memprofile",
+      "configurePreset": "examples_memprofile"
+    },
+    {
+      "name": "arm_cross",
+      "configurePreset": "arm_cross",
+      "jobs": 4,
+      "targets": [
+        "DTypes", "DataStorage", "Quantization", "TensorConversion", "Tensor",
+        "Add", "Arithmetic", "ArithmeticType", "Comparison", "Distributions",
+        "Div", "Kernel", "Log", "Matmul", "Mul", "MinMax", "PointwiseFused",
+        "Reduce", "Rounding", "Square", "Sub", "Sum", "SlidingWindow1d", "AdaptiveWindow1d",
+        "Conv1dKernel", "ConvTranspose1dKernel", "ExecuteOp",
+        "Conv1d", "Conv1dTransposed", "MaxPool1d", "AvgPool1d",
+        "AdaptiveAvgPool1d", "Dropout", "LayerNorm", "GroupNorm", "Layer",
+        "Linear", "QuantizationLayer", "Relu", "Softmax", "Flatten",
+        "Optimizer", "Sgd", "AdamW", "LrScheduler",
+        "CrossEntropy", "LossFunction", "MSE",
+        "Serialize", "Deserialize"
+      ]
     }
   ],
   "testPresets": [

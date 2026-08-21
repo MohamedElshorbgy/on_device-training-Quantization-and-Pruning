@@ -12,6 +12,7 @@
 #include "Dropout.h"
 #include "InferenceApi.h"
 #include "Layer.h"
+#include "LayerConfigAccess.h"
 #include "LayerNorm.h"
 #include "Linear.h"
 #include "MaxPool1d.h"
@@ -27,49 +28,10 @@
 static void initBufferOutput(tensor_t *buffer, layer_t *currentLayer, shape_t *inputShape,
                              sparsity_t *inputSparsity, quantization_t *inputQ) {
     layerType_t currentLayerType = currentLayer->type;
-    quantization_t *currentQ = NULL;
-
-    switch (currentLayerType) {
-    case LINEAR:
-        currentQ = currentLayer->config->linear->forwardQ;
-        break;
-    case RELU:
-        currentQ = currentLayer->config->relu->forwardQ;
-        break;
-    case SOFTMAX:
-        currentQ = currentLayer->config->softmax->forwardQ;
-        break;
-    case FLATTEN:
+    quantization_t *currentQ = layerOutputQ(currentLayer);
+    if (currentQ == NULL) {
         // Flatten has no per-layer quantization; output dtype equals input dtype.
         currentQ = inputQ;
-        break;
-    case CONV1D:
-        currentQ = currentLayer->config->conv1d->forwardQ;
-        break;
-    case CONV1D_TRANSPOSED:
-        currentQ = currentLayer->config->conv1dTransposed->forwardQ;
-        break;
-    case MAXPOOL1D:
-        currentQ = currentLayer->config->maxPool1d->forwardQ;
-        break;
-    case AVGPOOL1D:
-        currentQ = currentLayer->config->avgPool1d->forwardQ;
-        break;
-    case ADAPTIVE_AVGPOOL1D:
-        currentQ = currentLayer->config->adaptiveAvgPool1d->forwardQ;
-        break;
-    case DROPOUT:
-        currentQ = currentLayer->config->dropout->forwardQ;
-        break;
-    case LAYERNORM:
-        currentQ = currentLayer->config->layerNorm->forwardQ;
-        break;
-    case QUANTIZATION:
-        currentQ = currentLayer->config->quantization->forwardQ;
-        break;
-    default:
-        PRINT_ERROR("Unknown Layer Type!");
-        exit(1);
     }
 
     size_t sizeDims = inputShape->numberOfDimensions;
@@ -94,13 +56,14 @@ static void initBufferOutput(tensor_t *buffer, layer_t *currentLayer, shape_t *i
     case FLOAT32:
         initFloat32Quantization(q);
         break;
-    case SYM_INT32:
+    case SYM_INT32: {
         symInt32QConfig_t *currentQC = currentQ->qConfig;
         symInt32QConfig_t *symInt32QC = reserveMemory(sizeof(symInt32QConfig_t));
 
-        initSymInt32QConfig(currentQC->roundingMode, symInt32QC);
+        initSymInt32QConfigWithQMaxBits(currentQC->roundingMode, symInt32QC, currentQC->qMaxBits);
         initSymInt32Quantization(symInt32QC, q);
         break;
+    }
     default:
         PRINT_ERROR("Unknown QType!");
         exit(1);
@@ -138,6 +101,8 @@ static void initBufferInput(tensor_t *input, tensor_t *buffer) {
         symInt32QConfig_t *currentQC = currentQ->qConfig;
         symInt32QConfig_t *symInt32QC = reserveMemory(sizeof(symInt32QConfig_t));
         symInt32QC->roundingMode = currentQC->roundingMode;
+        symInt32QC->scale = currentQC->scale;
+        symInt32QC->qMaxBits = currentQC->qMaxBits;
         q->qConfig = symInt32QC;
         break;
     default:
@@ -191,13 +156,13 @@ tensor_t **inferenceBatched(layer_t **model, size_t numberOfLayers, batch_t *bat
     return tensorArr;
 }
 
-inferenceStats_t *reserveInferenceStats(tensor_t *label) {
+/* Sized from the PRODUCED output, not the label: a classifier's label is
+ * rank-1 [C] while the model emits [1, C] — sizing from the label made the
+ * later shape copy overflow the dimensions array (ASan-verified). Mirrors
+ * initTrainingStats (CalculateGradsSequential.c). */
+static inferenceStats_t *reserveInferenceStats(tensor_t *producedOutput) {
     inferenceStats_t *inferenceStats = reserveMemory(sizeof(inferenceStats_t));
-
-    shape_t *outputShape = getShapeLike(label->shape);
-    quantization_t *outputQ = getQLike(label->quantization);
-    inferenceStats->output = initTensor(outputShape, outputQ, NULL);
-
+    inferenceStats->output = getTensorLike(producedOutput);
     return inferenceStats;
 }
 
@@ -225,8 +190,8 @@ inferenceStats_t *inferenceWithLoss(layer_t **model, size_t numberOfLayers, tens
         outputNext = outputCurr;
     }
 
-    inferenceStats_t *inferenceStats = reserveInferenceStats(label);
-    copyTensor(inferenceStats->output, &outputNext);
+    inferenceStats_t *inferenceStats = reserveInferenceStats(&outputNext);
+    convertTensor(&outputNext, inferenceStats->output);
 
     lossFunctions_t lossFns = lossFunctions[funcType];
     float loss = lossFns.forward(&outputNext, label, forwardReduction);

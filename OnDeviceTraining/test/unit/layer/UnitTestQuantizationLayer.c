@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "DeathTest.h"
 #include "Layer.h"
 #include "LayerQuant.h"
 #include "QuantLayerApi.h"
@@ -42,6 +43,28 @@ static tensor_t *buildFloat2D(size_t rows, size_t cols) {
     shape_t *shape = reserveMemory(sizeof(shape_t));
     setShape(shape, dims, 2, order);
     return initTensor(shape, quantizationInitFloat(), NULL);
+}
+
+static tensor_t *buildAsym2D(size_t rows, size_t cols, uint8_t qBits) {
+    size_t *dims = reserveMemory(2 * sizeof(size_t));
+    dims[0] = rows;
+    dims[1] = cols;
+    size_t *order = reserveMemory(2 * sizeof(size_t));
+    setOrderOfDimsForNewTensor(2, order);
+    shape_t *shape = reserveMemory(sizeof(shape_t));
+    setShape(shape, dims, 2, order);
+    return initTensor(shape, quantizationInitAsym(qBits, HALF_AWAY), NULL);
+}
+
+static tensor_t *buildBool2D(size_t rows, size_t cols) {
+    size_t *dims = reserveMemory(2 * sizeof(size_t));
+    dims[0] = rows;
+    dims[1] = cols;
+    size_t *order = reserveMemory(2 * sizeof(size_t));
+    setOrderOfDimsForNewTensor(2, order);
+    shape_t *shape = reserveMemory(sizeof(shape_t));
+    setShape(shape, dims, 2, order);
+    return initTensor(shape, quantizationInitBool(), NULL);
 }
 
 void testQuantizationForwardSymToSymMatchesDirectRequant(void) {
@@ -102,6 +125,70 @@ void testQuantizationForwardSymToFloatMatchesConvertTensor(void) {
 
     TEST_ASSERT_EQUAL_FLOAT_ARRAY(expectedVals, actualVals, 4);
     TEST_ASSERT_EQUAL_FLOAT(6000.0f, actualVals[0]); /* anti-vacuity: 12000 * 0.5 */
+}
+
+void testQuantLayerConvertsAsymToSymInt32MatchesConvertTensor(void) {
+    /* #266 regression, strengthened per the task-3 brief's contingency: a
+     * plain float<->ASYM round trip already passes under the Task-2 shim
+     * (arithmeticFromQuantization's storage-only fallback to ARITH_FLOAT32
+     * happens to reconstruct the same float detour that convertFloatTensorTo*
+     * /convertAsymTensorToFloatTensor already do). ASYM->SYM_INT32 is
+     * genuinely broken by the shim: convertAsymTensorToSymInt32Tensor
+     * preserves the ASYM tensor's OWN scale exactly (mantissa = code +
+     * zeroPoint, scale unchanged - a lossless code shift). The shim instead
+     * routes ASYM through a FLOAT32 detour (arithmeticFromQuantization(ASYM)
+     * falls back to ARITH_FLOAT32), landing on convertFloatTensorToSymInt32Tensor,
+     * which derives a FRESH absmax-based scale - a different mantissa AND a
+     * different scale than the direct conversionMatrix path. */
+    tensor_t *input = buildAsym2D(2, 2, 8);
+    asymQConfig_t *inputAsymQC = input->quantization->qConfig;
+    inputAsymQC->scale = 0.25f;
+    inputAsymQC->zeroPoint = -10;
+    const uint8_t codes[4] = {0, 40, 80, 255};
+    memcpy(input->data, codes, sizeof(codes));
+
+    tensor_t *expected = buildSym2D(2, 2);
+    convertTensor(input, expected);
+
+    /* Fixture sanity: the direct conversion must preserve the ASYM scale
+     * verbatim (not re-derive one), otherwise the differential assert below
+     * is vacuous. */
+    TEST_ASSERT_EQUAL_FLOAT(0.25f, ((symInt32QConfig_t *)expected->quantization->qConfig)->scale);
+
+    tensor_t *actual = buildSym2D(2, 2);
+    layer_t qLayer = {.type = QUANTIZATION, .config = NULL};
+    quantizationForward(&qLayer, input, actual);
+
+    int32_t expectedMantissas[4];
+    int32_t actualMantissas[4];
+    memcpy(expectedMantissas, expected->data, sizeof(expectedMantissas));
+    memcpy(actualMantissas, actual->data, sizeof(actualMantissas));
+    float expectedScale = ((symInt32QConfig_t *)expected->quantization->qConfig)->scale;
+    float actualScale = ((symInt32QConfig_t *)actual->quantization->qConfig)->scale;
+
+    freeTensor(actual);
+    freeTensor(expected);
+    freeTensor(input);
+
+    TEST_ASSERT_EQUAL_INT32_ARRAY(expectedMantissas, actualMantissas, 4);
+    TEST_ASSERT_EQUAL_FLOAT(expectedScale, actualScale);
+}
+
+void testQuantLayerAbortsOnUnpopulatedConversionCell(void) {
+    /* BOOL -> ASYM has no real conversionMatrix cell: every entry in the BOOL
+     * row (other than BOOL->BOOL, which never reaches the matrix - convertTensor's
+     * same-type branch short-circuits first) is unsupportedConversionTypes,
+     * which PRINT_ERRORs and exit(1)s (verified: the BOOL row's designated
+     * initializer in src/tensor/TensorConversion.c:511-515 assigns
+     * unsupportedConversionTypes to every non-BOOL column). */
+    tensor_t *input = buildBool2D(1, 4);
+    tensor_t *output = buildAsym2D(1, 4, 8);
+    layer_t qLayer = {.type = QUANTIZATION, .config = NULL};
+
+    ASSERT_EXITS_WITH_FAILURE(quantizationForward(&qLayer, input, output));
+
+    freeTensor(output);
+    freeTensor(input);
 }
 
 void testQuantizationBackwardRequantsDyMantissasLikeDirectRequant(void) {
@@ -167,14 +254,14 @@ void testLayerFunctionsVtableHasQuantizationRow(void) {
 void testQuantizationConfigUnionMemberRoundTrip(void) {
     quantization_t *fq = quantizationInitSymInt32(HALF_AWAY);
     quantization_t *bq = quantizationInitSymInt32(HALF_AWAY);
-    quantizationConfig_t cfg = {.forwardQ = fq, .backwardQ = bq, .ownsQuantizations = false};
+    quantizationConfig_t cfg = {.outputQ = fq, .propLossQ = bq, .ownsQuantizations = false};
     layerConfig_t lc = {.quantization = &cfg};
     layer_t layer;
     initLayer(&layer, QUANTIZATION, &lc);
 
     TEST_ASSERT_EQUAL_INT(QUANTIZATION, layer.type);
-    TEST_ASSERT_EQUAL_PTR(fq, layer.config->quantization->forwardQ);
-    TEST_ASSERT_EQUAL_PTR(bq, layer.config->quantization->backwardQ);
+    TEST_ASSERT_EQUAL_PTR(fq, layer.config->quantization->outputQ);
+    TEST_ASSERT_EQUAL_PTR(bq, layer.config->quantization->propLossQ);
 
     freeQuantization(bq);
     freeQuantization(fq);
@@ -183,7 +270,7 @@ void testQuantizationConfigUnionMemberRoundTrip(void) {
 void testQuantLayerInitBorrowingStoresQuantPointersVerbatim(void) {
     quantization_t *fq = quantizationInitSymInt32(HALF_AWAY);
     quantization_t *bq = quantizationInitSymInt32(HALF_AWAY);
-    layerQuant_t lq = {.forwardMath = fq, .backwardMath = bq};
+    layerQuant_t lq = {.outputQ = fq, .propLossQ = bq};
 
     layer_t *layer = quantLayerInit(&lq);
 
@@ -192,8 +279,8 @@ void testQuantLayerInitBorrowingStoresQuantPointersVerbatim(void) {
     quantizationConfig_t *cfg = layer->config->quantization;
     TEST_ASSERT_NOT_NULL(cfg);
     TEST_ASSERT_FALSE(cfg->ownsQuantizations);
-    TEST_ASSERT_EQUAL_PTR(fq, cfg->forwardQ);
-    TEST_ASSERT_EQUAL_PTR(bq, cfg->backwardQ);
+    TEST_ASSERT_EQUAL_PTR(fq, cfg->outputQ);
+    TEST_ASSERT_EQUAL_PTR(bq, cfg->propLossQ);
 
     freeQuantLayer(layer);
     /* Borrowing: caller-owned quantizations survive the layer teardown. */
@@ -204,17 +291,17 @@ void testQuantLayerInitBorrowingStoresQuantPointersVerbatim(void) {
 
 void testQuantLayerInitOwningDeepCopiesQuantizations(void) {
     quantization_t *q = quantizationInitSymInt32(HALF_AWAY);
-    layerQuant_t lq = {.forwardMath = q, .backwardMath = q};
+    layerQuant_t lq = {.outputQ = q, .propLossQ = q};
 
     layer_t *layer = quantLayerInitOwning(&lq);
 
     quantizationConfig_t *cfg = layer->config->quantization;
     TEST_ASSERT_TRUE(cfg->ownsQuantizations);
-    TEST_ASSERT_NOT_EQUAL(q, cfg->forwardQ);
-    TEST_ASSERT_NOT_EQUAL(q, cfg->backwardQ);
-    TEST_ASSERT_NOT_EQUAL(cfg->forwardQ, cfg->backwardQ); /* two separate copies */
-    TEST_ASSERT_EQUAL_INT(SYM_INT32, cfg->forwardQ->type);
-    TEST_ASSERT_EQUAL_INT(SYM_INT32, cfg->backwardQ->type);
+    TEST_ASSERT_NOT_EQUAL(q, cfg->outputQ);
+    TEST_ASSERT_NOT_EQUAL(q, cfg->propLossQ);
+    TEST_ASSERT_NOT_EQUAL(cfg->outputQ, cfg->propLossQ); /* two separate copies */
+    TEST_ASSERT_EQUAL_INT(SYM_INT32, cfg->outputQ->type);
+    TEST_ASSERT_EQUAL_INT(SYM_INT32, cfg->propLossQ->type);
 
     freeQuantLayer(layer);
     freeQuantization(q);
@@ -226,7 +313,7 @@ void testQuantLayerInitOwningFreesAllAllocationsWithoutLeak(void) {
      * precedent). */
     for (int i = 0; i < 5; i++) {
         quantization_t *q = quantizationInitSymInt32(HALF_AWAY);
-        layerQuant_t lq = {.forwardMath = q, .backwardMath = q};
+        layerQuant_t lq = {.outputQ = q, .propLossQ = q};
         layer_t *layer = quantLayerInitOwning(&lq);
         freeQuantLayer(layer);
         freeQuantization(q);
@@ -238,6 +325,8 @@ int main(void) {
     UNITY_BEGIN();
     RUN_TEST(testQuantizationForwardSymToSymMatchesDirectRequant);
     RUN_TEST(testQuantizationForwardSymToFloatMatchesConvertTensor);
+    RUN_TEST(testQuantLayerConvertsAsymToSymInt32MatchesConvertTensor);
+    RUN_TEST(testQuantLayerAbortsOnUnpopulatedConversionCell);
     RUN_TEST(testQuantizationBackwardRequantsDyMantissasLikeDirectRequant);
     RUN_TEST(testQuantizationCalcOutputShapeIdentityIncludingPermutedOrder);
     RUN_TEST(testLayerFunctionsVtableHasQuantizationRow);

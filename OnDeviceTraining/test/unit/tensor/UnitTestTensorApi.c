@@ -48,6 +48,14 @@ _Static_assert(_Generic((&gradInit),
                    default: 0),
                "gradInit must take (tensor_t *, quantization_t *, sparsity_t *)");
 
+/* Compile-time contract: gradInitSym takes (tensor_t *, uint8_t, roundingMode_t,
+ * sparsity_t *) and returns tensor_t *, mirroring gradInitAsym. Packed grad
+ * storage (#269, PR3). */
+_Static_assert(_Generic(&gradInitSym,
+                   tensor_t *(*)(tensor_t *, uint8_t, roundingMode_t, sparsity_t *): 1,
+                   default: 0),
+               "gradInitSym signature contract");
+
 void setUp() {}
 void tearDown() {}
 
@@ -400,8 +408,9 @@ void testTensorFillFromFloatBuffer_CopiesValues_SourceCanGoOutOfScope(void) {
 }
 
 void testFreeParameter_NullGrad_DoesNotSegfault(void) {
-    /* H3 regression: linearLayerInitNonTrainableLegacy passes NULL for grad into
-     * parameterInit; today freeParameter dereferences it and crashes. */
+    /* H3 regression: a grad-optional Linear (weights wrapped via parameterInit
+     * with NULL grad, formerly built by the deleted linearLayerInitNonTrainableLegacy)
+     * used to crash freeParameter, which dereferenced the NULL grad. */
     size_t *dims = reserveMemory(2 * sizeof(size_t));
     dims[0] = 1;
     dims[1] = 2;
@@ -654,6 +663,92 @@ void testGradInit_SymInt32_MatchesParamShapeAndDtype(void) {
     TEST_ASSERT_EQUAL_UINT(5, d1);
 }
 
+void testGradInitSymInt32StaysInt16WhileDefaultIsInt12() {
+    /* default operand config is int12 after the #227 flip */
+    symInt32QConfig_t opQC;
+    initSymInt32QConfig(HALF_AWAY, &opQC);
+    TEST_ASSERT_EQUAL_UINT8(12, opQC.qMaxBits);
+
+    /* a grad accumulator built from a param stays int16 (#45 contract) */
+    size_t dims[] = {2, 3};
+    size_t order[] = {0, 1};
+    shape_t shape = {.dimensions = dims, .numberOfDimensions = 2, .orderOfDimensions = order};
+    tensor_t *param = initTensor(getShapeLike(&shape), quantizationInitSymInt32(HALF_AWAY), NULL);
+    tensor_t *grad = gradInitSymInt32(param, HALF_AWAY, NULL);
+    TEST_ASSERT_EQUAL_UINT8(16, ((symInt32QConfig_t *)grad->quantization->qConfig)->qMaxBits);
+    freeTensor(grad);
+    freeTensor(param);
+}
+
+void testGetQLikeSymPreservesWidthAndRoundingResetsScale(void) {
+    /* Precedent A (matches SYM_INT32/ASYM arms): qBits+roundingMode carried, scale
+     * reset to 1.f — a fresh clone is an ungridded zero-state. Mutation guard:
+     * re-removing the SYM arm exits the run ("Unknown QType"). */
+    quantization_t *src = quantizationInitSym(6, SR_HALF_AWAY);
+    ((symQConfig_t *)src->qConfig)->scale = 0.25f; /* carried scale must NOT be cloned */
+    quantization_t *like = getQLike(src);
+
+    qtype_t likeType = like->type;
+    symQConfig_t likeQC = *(symQConfig_t *)like->qConfig;
+    freeQuantization(src);
+    freeQuantization(like);
+
+    TEST_ASSERT_EQUAL_INT(SYM, likeType);
+    TEST_ASSERT_EQUAL_UINT8(6, likeQC.qBits);
+    TEST_ASSERT_EQUAL_INT(SR_HALF_AWAY, likeQC.roundingMode);
+    TEST_ASSERT_EQUAL_FLOAT(1.f, likeQC.scale);
+}
+
+void testGetDataLikeSymAllocatesPackedCeiling(void) {
+    /* qBits=3, N=10 -> 4 packed bytes; ASan companion: write all 4, free safely.
+     * Mutation guard: sizing via numberOfValues * calcBytesPerElement would give 10 —
+     * assert allocation is usable exactly like calcNumberOfBytesForData says. */
+    quantization_t *q = quantizationInitSym(3, HALF_AWAY);
+    uint8_t *data = getDataLike(q, 10);
+    for (size_t i = 0; i < 4; i++) {
+        data[i] = 0xFF;
+    }
+
+    /* Scoped second quantization to derive the expected byte count without
+     * re-touching `q` after `data` is freed (assert-last discipline). */
+    quantization_t *q2 = quantizationInitSym(3, HALF_AWAY);
+    size_t expectedBytes = calcNumberOfBytesForData(q2, 10);
+
+    freeReservedMemory(data);
+    freeQuantization(q);
+    freeQuantization(q2);
+
+    TEST_ASSERT_EQUAL_size_t(4, expectedBytes);
+}
+
+void testGradInitSymAllocatesPackedZeroGrad(void) {
+    /* Grad = SYM(qBits) clone of the param's SHAPE (not dtype), zero-filled,
+     * packed-size buffer. Mutation guard: routing through getQLike-of-param
+     * would yield FLOAT32; asserting SYM+qBits catches it. */
+    size_t *dims = reserveMemory(2 * sizeof(size_t));
+    dims[0] = 2;
+    dims[1] = 5;
+    size_t *order = reserveMemory(2 * sizeof(size_t));
+    setOrderOfDimsForNewTensor(2, order);
+    shape_t *shape = reserveMemory(sizeof(shape_t));
+    setShape(shape, dims, 2, order);
+    tensor_t *p = initTensor(shape, quantizationInitFloat(), NULL);
+    tensor_t *g = gradInitSym(p, 4, SR_HALF_AWAY, NULL);
+
+    qtype_t gType = g->quantization->type;
+    symQConfig_t gQC = *(symQConfig_t *)g->quantization->qConfig;
+    size_t gBytes = calcBytesPerTensor(g);
+    uint8_t byte0 = g->data[0];
+    freeTensor(g);
+    freeTensor(p);
+
+    TEST_ASSERT_EQUAL_INT(SYM, gType);
+    TEST_ASSERT_EQUAL_UINT8(4, gQC.qBits);
+    TEST_ASSERT_EQUAL_INT(SR_HALF_AWAY, gQC.roundingMode);
+    TEST_ASSERT_EQUAL_size_t(5, gBytes); /* ceil(40/8) */
+    TEST_ASSERT_EQUAL_UINT8(0, byte0);   /* calloc zero-fill */
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(testTensorInitWithDistribution_Zeros_InitializesProductOfDimsValues);
@@ -681,5 +776,9 @@ int main(void) {
     RUN_TEST(testInitDistribution_KaimingUniform_NotAllZero);
     RUN_TEST(testInitDistribution_KaimingNormal_NotAllZero);
     RUN_TEST(testTensorFillFromBoolBuffer_RoundTrip_N12);
+    RUN_TEST(testGradInitSymInt32StaysInt16WhileDefaultIsInt12);
+    RUN_TEST(testGetQLikeSymPreservesWidthAndRoundingResetsScale);
+    RUN_TEST(testGetDataLikeSymAllocatesPackedCeiling);
+    RUN_TEST(testGradInitSymAllocatesPackedZeroGrad);
     return UNITY_END();
 }

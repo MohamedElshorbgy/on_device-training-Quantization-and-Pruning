@@ -27,16 +27,16 @@
 #include <time.h>
 #include <math.h>
 
-/* ── Memory tracking (PC / Linux / WSL only) ────────────────────────
- * On STM32 /proc does not exist; guard with __linux__.                */
-#ifdef __linux__
+/* ── Memory tracking ─────────────────────────────────────────────────
+ * Linux/WSL : reads /proc/self/status (VmRSS, VmPeak, VmSize)
+ * Windows   : uses GetProcessMemoryInfo from psapi.h
+ * STM32     : stub (no OS memory API available)               */
+#if defined(__linux__)
 #  include <sys/resource.h>
 static void printProcessMemory(const char *label)
 {
-    /* Read VmRSS and VmPeak from /proc/self/status */
     FILE *f = fopen("/proc/self/status", "r");
     if (!f) { printf("[mem] (%s) /proc/self/status unavailable\n", label); return; }
-
     long vm_rss_kb = 0, vm_peak_kb = 0, vm_size_kb = 0;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
@@ -45,12 +45,27 @@ static void printProcessMemory(const char *label)
         else if (strncmp(line, "VmSize:", 7) == 0) sscanf(line + 7, "%ld", &vm_size_kb);
     }
     fclose(f);
-
     printf("[mem] %-30s  RSS=%-7ld KB  Virtual=%-7ld KB  PeakRSS=%-7ld KB\n",
            label, vm_rss_kb, vm_size_kb, vm_peak_kb);
 }
+#elif defined(_WIN32) || defined(_WIN64)
+#  include <windows.h>
+#  include <psapi.h>
+static void printProcessMemory(const char *label)
+{
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        long rss_kb      = (long)(pmc.WorkingSetSize      / 1024);
+        long peak_rss_kb = (long)(pmc.PeakWorkingSetSize  / 1024);
+        long pagefile_kb = (long)(pmc.PagefileUsage       / 1024);
+        printf("[mem] %-30s  RSS=%-7ld KB  PageFile=%-7ld KB  PeakRSS=%-7ld KB\n",
+               label, rss_kb, pagefile_kb, peak_rss_kb);
+    } else {
+        printf("[mem] (%s) GetProcessMemoryInfo failed\n", label);
+    }
+}
 #else
-/* Stub for non-Linux builds (STM32 etc.) */
+/* Stub for STM32 / bare-metal */
 static void printProcessMemory(const char *label) { (void)label; }
 #endif
 
@@ -129,85 +144,161 @@ static const char *CLASS_NAMES[NUM_CLS] = {
 static const int RIGL_IDX[RIGL_NUM_LAYERS] = {0, 3, 6, 10};
 
 /* ═══════════════════════════════════════════════════════════════════
- *  Dataset helpers
+ *  Streaming dataset loader — one batch at a time
+ * ═══════════════════════════════════════════════════════════════════
+ *
+ * Instead of loading the full .npy dataset into RAM (~34 MB for
+ * train_x), we keep the file open and fseek/fread one sample per
+ * getSample() call.  Labels are tiny (~29 KB) and stay in RAM.
+ *
+ * We pre-allocate BATCH_SIZE sample slots so the DataLoader can hold
+ * a full batch simultaneously.  Slots are reused round-robin.
+ *
+ * Memory: ~BATCH_SIZE × (INPUT_T × INPUT_C + NUM_CLS) × 4 bytes
+ *       = 64 × (1152 + 6) × 4 ≈ 295 KB   (vs ~34 MB before)
  * ═══════════════════════════════════════════════════════════════════ */
-static dataset_t g_trainDataset;
-static dataset_t g_valDataset;
-static dataset_t g_testDataset;
 
-static void reshapeItemsAddBatchDim(tensorArray_t *items)
+#include "NPYLoader.h"   /* openNPYFile, checkMagic, readHeaderSize,
+                            readHeader, getNumberOfDimsFromHeader,
+                            getShapeFromHeader                        */
+
+typedef struct {
+    FILE    *f;            /* X file kept open for streaming          */
+    long     data_offset;  /* byte offset where raw X data starts     */
+    size_t   sample_bytes; /* bytes per X sample (T*C*sizeof(float))  */
+    size_t   n_samples;    /* total number of samples in dataset      */
+    int32_t *labels;       /* all integer labels loaded in RAM        */
+    sample_t *pool[BATCH_SIZE]; /* pre-allocated sample slots         */
+    size_t    slot;        /* round-robin slot counter                */
+} StreamLoader;
+
+static StreamLoader g_trainStream;
+static StreamLoader g_valStream;
+static StreamLoader g_testStream;
+
+static void streamLoaderInit(StreamLoader *sl,
+                             const char *x_path, const char *y_path)
 {
-    for (size_t i = 0; i < items->size; ++i) {
-        tensor_t *t  = items->array[i];
-        size_t oldRk = t->shape->numberOfDimensions;
-        size_t newRk = oldRk + 1;
-        size_t *dims  = reserveMemory(newRk * sizeof(size_t));
-        size_t *order = reserveMemory(newRk * sizeof(size_t));
-        dims[0] = 1;
-        for (size_t d = 0; d < oldRk; ++d) dims[d+1] = t->shape->dimensions[d];
-        for (size_t d = 0; d < newRk; ++d) order[d]  = d;
-        freeReservedMemory(t->shape->dimensions);
-        freeReservedMemory(t->shape->orderOfDimensions);
-        t->shape->dimensions        = dims;
-        t->shape->orderOfDimensions = order;
-        t->shape->numberOfDimensions = newRk;
+    /* ── Open X file and parse header ─────────────────────────────── */
+    sl->f = openNPYFile((char *)x_path);
+    checkMagic(sl->f);
+    uint32_t hsize = readHeaderSize(sl->f);
+    char *hdr = malloc(hsize + 1);
+    readHeader(hdr, hsize, sl->f);
+
+    size_t ndims = getNumberOfDimsFromHeader(hdr);
+    size_t dims[ndims], order[ndims];
+    shape_t shape;
+    shape.dimensions        = dims;
+    shape.orderOfDimensions = order;
+    shape.numberOfDimensions = ndims;
+    getShapeFromHeader(&shape, dims, order, hdr, ndims);
+    free(hdr);
+
+    sl->n_samples   = dims[0];
+    sl->data_offset = ftell(sl->f);
+
+    sl->sample_bytes = sizeof(float);
+    for (size_t i = 1; i < ndims; i++) sl->sample_bytes *= dims[i];
+
+    /* ── Load all labels into RAM (small: n_samples × 4 bytes) ───── */
+    FILE *fy = openNPYFile((char *)y_path);
+    checkMagic(fy);
+    uint32_t yhsize = readHeaderSize(fy);
+    char *yhdr = malloc(yhsize + 1);
+    readHeader(yhdr, yhsize, fy);
+    free(yhdr);
+
+    sl->labels = malloc(sl->n_samples * sizeof(int32_t));
+    size_t nr = fread(sl->labels, sizeof(int32_t), sl->n_samples, fy);
+    if (nr != sl->n_samples) { fprintf(stderr,"label fread error\n"); exit(1); }
+    fclose(fy);
+
+    /* ── Pre-allocate BATCH_SIZE sample slots ─────────────────────── */
+    quantization_t *qf = quantizationInitFloat();
+
+    for (int s = 0; s < BATCH_SIZE; s++) {
+        sl->pool[s] = malloc(sizeof(sample_t));
+
+        /* Input tensor: shape [1, dims[1], ..., dims[ndims-1]] */
+        size_t *xd  = reserveMemory(ndims * sizeof(size_t));
+        size_t *xo  = reserveMemory(ndims * sizeof(size_t));
+        xd[0] = 1;
+        for (size_t i = 1; i < ndims; i++) xd[i] = dims[i];
+        for (size_t i = 0; i < ndims; i++) xo[i] = i;
+        shape_t *xs = reserveMemory(sizeof(shape_t));
+        xs->dimensions        = xd;
+        xs->orderOfDimensions = xo;
+        xs->numberOfDimensions = ndims;
+        sl->pool[s]->item = initTensor(xs, getQLike(qf), NULL);
+
+        /* Label tensor: one-hot [NUM_CLS] */
+        size_t *yd  = reserveMemory(sizeof(size_t));
+        size_t *yo  = reserveMemory(sizeof(size_t));
+        yd[0] = NUM_CLS; yo[0] = 0;
+        shape_t *ys = reserveMemory(sizeof(shape_t));
+        ys->dimensions        = yd;
+        ys->orderOfDimensions = yo;
+        ys->numberOfDimensions = 1;
+        sl->pool[s]->label = initTensor(ys, getQLike(qf), NULL);
     }
+    freeQuantization(qf);
+    sl->slot = 0;
 }
 
-static tensorArray_t *buildOneHotLabels(tensorArray_t *intLabels)
+/* Called by the DataLoader for each sample in a batch. */
+static sample_t *streamGetSample(StreamLoader *sl, size_t id)
 {
-    tensorArray_t *out = reserveMemory(sizeof(tensorArray_t));
-    tensor_t **arr     = reserveMemory(intLabels->size * sizeof(tensor_t *));
-    out->array = arr;
-    out->size  = intLabels->size;
-    for (size_t i = 0; i < intLabels->size; ++i) {
-        size_t *dims  = reserveMemory(sizeof(size_t));
-        size_t *order = reserveMemory(sizeof(size_t));
-        dims[0] = NUM_CLS; order[0] = 0;
-        shape_t *shape           = reserveMemory(sizeof(shape_t));
-        shape->dimensions        = dims;
-        shape->orderOfDimensions = order;
-        shape->numberOfDimensions = 1;
-        quantization_t *q = quantizationInitFloat();
-        tensor_t       *t = initTensor(shape, q, NULL);
-        int32_t cls = ((int32_t *)intLabels->array[i]->data)[0];
-        float  *data = (float *)t->data;
-        for (size_t c = 0; c < NUM_CLS; ++c)
-            data[c] = (c == (size_t)cls) ? 1.0f : 0.0f;
-        arr[i] = t;
-    }
-    return out;
+    size_t s = sl->slot % BATCH_SIZE;
+    sl->slot++;
+
+    /* Load X into the pool slot's tensor buffer */
+    fseek(sl->f, sl->data_offset + (long)(id * sl->sample_bytes), SEEK_SET);
+    fread(sl->pool[s]->item->data, 1, sl->sample_bytes, sl->f);
+
+    /* Build one-hot label in the pool slot's label buffer */
+    int32_t cls = sl->labels[id];
+    float  *yd  = (float *)sl->pool[s]->label->data;
+    for (int c = 0; c < NUM_CLS; c++)
+        yd[c] = (c == cls) ? 1.0f : 0.0f;
+
+    /* Return a thin malloc'd wrapper — the DataLoader calls freeSample()
+     * → free() on this pointer after each batch.  By returning a fresh
+     * wrapper (not the pool slot itself), freeSample() only frees the
+     * wrapper; the pool's tensor buffers stay valid for the next batch.
+     * This matches the pattern used by npyGetSample() in the framework. */
+    sample_t *wrap = malloc(sizeof(sample_t));
+    wrap->item  = sl->pool[s]->item;
+    wrap->label = sl->pool[s]->label;
+    return wrap;
 }
 
 static void initDataSets(const char *dataDir)
 {
-    char path[512];
-#define LOAD(split, ds) \
-    snprintf(path, sizeof(path), "%s/" split "_x.npy", dataDir); \
-    tensorArray_t *ds##X = npyLoad(path); \
-    snprintf(path, sizeof(path), "%s/" split "_y.npy", dataDir); \
-    tensorArray_t *ds##Y = npyLoad(path); \
-    reshapeItemsAddBatchDim(ds##X); \
-    g_##ds##Dataset.items  = ds##X; \
-    g_##ds##Dataset.labels = buildOneHotLabels(ds##Y);
+    char xp[512], yp[512];
 
-    LOAD("train", train)
-    LOAD("val",   val)
-    LOAD("test",  test)
-#undef LOAD
+#define INIT_STREAM(split, sl) \
+    snprintf(xp, sizeof(xp), "%s/" split "_x.npy", dataDir); \
+    snprintf(yp, sizeof(yp), "%s/" split "_y.npy", dataDir); \
+    streamLoaderInit(&(sl), xp, yp);
 
-    printf("[data] train=%-5zu  val=%-5zu  test=%zu\n",
-           g_trainDataset.items->size,
-           g_valDataset.items->size,
-           g_testDataset.items->size);
+    INIT_STREAM("train", g_trainStream)
+    INIT_STREAM("val",   g_valStream)
+    INIT_STREAM("test",  g_testStream)
+#undef INIT_STREAM
+
+    printf("[data] train=%-5zu  val=%-5zu  test=%zu  (streaming — one batch at a time)\n",
+           g_trainStream.n_samples,
+           g_valStream.n_samples,
+           g_testStream.n_samples);
 }
 
-static sample_t *getTrainSample(size_t id) { return npyGetSample(&g_trainDataset, id); }
-static sample_t *getValSample  (size_t id) { return npyGetSample(&g_valDataset,   id); }
-static sample_t *getTestSample (size_t id) { return npyGetSample(&g_testDataset,  id); }
-static size_t    getTrainSize  (void)      { return g_trainDataset.items->size; }
-static size_t    getValSize    (void)      { return g_valDataset.items->size;   }
-static size_t    getTestSize   (void)      { return g_testDataset.items->size;  }
+static sample_t *getTrainSample(size_t id) { return streamGetSample(&g_trainStream, id); }
+static sample_t *getValSample  (size_t id) { return streamGetSample(&g_valStream,   id); }
+static sample_t *getTestSample (size_t id) { return streamGetSample(&g_testStream,  id); }
+static size_t    getTrainSize  (void)      { return g_trainStream.n_samples; }
+static size_t    getValSize    (void)      { return g_valStream.n_samples;   }
+static size_t    getTestSize   (void)      { return g_testStream.n_samples;  }
 
 /* ═══════════════════════════════════════════════════════════════════
  *  Model (identical topology to har_classifier_v2)
@@ -245,14 +336,40 @@ static void buildModel(layer_t **model, layerQuant_t *lq)
  * ═══════════════════════════════════════════════════════════════════ */
 static uint8_t *g_masks[RIGL_NUM_LAYERS];
 
+/* ERK layer descriptors — must match RIGL_IDX order:
+ * conv1@0 (9→16,K=7), conv2@3 (16→32,K=5), conv3@6 (32→64,K=3),
+ * linear@10 (64→6)                                                    */
+static const rigl_layer_info_t ERK_INFO[RIGL_NUM_LAYERS] = {
+    {9,  16, 7, 1},   /* Conv1 */
+    {16, 32, 5, 1},   /* Conv2 */
+    {32, 64, 3, 1},   /* Conv3 */
+    {64,  6, 1, 0},   /* Linear */
+};
+
 static void riglInit(layer_t **model)
 {
+    /* Compute per-layer sizes */
+    int sizes[RIGL_NUM_LAYERS];
+    for (int i = 0; i < RIGL_NUM_LAYERS; i++)
+        sizes[i] = (int)rigl_layer_size(model[RIGL_IDX[i]]);
+
+    /* ERK: compute non-uniform per-layer sparsities */
+    float erk_sp[RIGL_NUM_LAYERS];
+    rigl_erk_sparsities(ERK_INFO, sizes, RIGL_NUM_LAYERS, RIGL_SPARSITY, erk_sp);
+
+    printf("\n[RigL] ERK sparsity distribution (global target = %.0f%%):\n",
+           RIGL_SPARSITY * 100.0f);
+    const char *names[] = {"Conv1","Conv2","Conv3","Linear"};
+    for (int i = 0; i < RIGL_NUM_LAYERS; i++)
+        printf("  %-8s  params=%-5d  sparsity=%.1f%%\n",
+               names[i], sizes[i], (double)(erk_sp[i] * 100.0f));
+    printf("\n");
+
     for (int i = 0; i < RIGL_NUM_LAYERS; i++) {
-        size_t n   = rigl_layer_size(model[RIGL_IDX[i]]);
-        g_masks[i] = (uint8_t *)malloc(n);
+        g_masks[i] = (uint8_t *)malloc((size_t)sizes[i]);
         if (!g_masks[i]) { fprintf(stderr,"OOM mask %d\n",i); exit(1); }
         rigl_init_from_layer(model[RIGL_IDX[i]], g_masks[i],
-                             RIGL_SPARSITY, (uint32_t)(SEED + i * 7));
+                             erk_sp[i], (uint32_t)(SEED + i * 7));
         rigl_apply_to_layer(model[RIGL_IDX[i]], g_masks[i]);
     }
 }
@@ -263,12 +380,35 @@ static void riglApplyAll(layer_t **model)
         rigl_apply_to_layer(model[RIGL_IDX[i]], g_masks[i]);
 }
 
+/* ── Cosine decay for the cycling fraction ───────────────────────────
+ * frac(t) = frac_0 * 0.5 * (1 + cos(pi * t / T_end))
+ *
+ * t      : current RigL update step (0-indexed)
+ * t_end  : total number of RigL update steps over full training
+ *
+ * At t=0       : frac = frac_0        (maximum exploration)
+ * At t=t_end/2 : frac = frac_0 * 0.5
+ * At t=t_end   : frac = 0             (mask frozen)           */
+static float riglDecayedFrac(int t, int t_end)
+{
+    if (t_end <= 0 || t >= t_end) return 0.0f;
+    float cos_val = cosf((float)M_PI * (float)t / (float)t_end);
+    float frac = RIGL_FRAC * 0.5f * (1.0f + cos_val);
+    return frac < 0.0f ? 0.0f : frac;
+}
+
+/* Global RigL update step counter and total steps (set in main). */
+static int g_rigl_step   = 0;
+static int g_rigl_t_end  = 1;
+
 static void riglUpdateAll(layer_t **model)
 {
+    float frac = riglDecayedFrac(g_rigl_step, g_rigl_t_end);
     for (int i = 0; i < RIGL_NUM_LAYERS; i++) {
-        rigl_step_layer(model[RIGL_IDX[i]], g_masks[i], RIGL_SPARSITY, RIGL_FRAC);
+        rigl_step_layer(model[RIGL_IDX[i]], g_masks[i], RIGL_SPARSITY, frac);
         rigl_apply_to_layer(model[RIGL_IDX[i]], g_masks[i]);
     }
+    g_rigl_step++;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -590,11 +730,13 @@ int main(int argc, char *argv[])
     printf("╚═════════════════════════════════════════════════════════════════╝\n\n");
 
     printProcessMemory("startup (before data load)");
+    mcuSimPrintStatus("startup");
 
     /* ── Load data ───────────────────────────────────────────────── */
     initDataSets(dataDir);
     printProcessMemory("after dataset load");
-    size_t trainSamples = g_trainDataset.items->size;
+    mcuSimPrintStatus("after dataset load");
+    size_t trainSamples = g_trainStream.n_samples;
 
     dataLoader_t *trainLoader =
         dataLoaderInit(getTrainSample, getTrainSize, BATCH_SIZE,
@@ -623,6 +765,7 @@ int main(int argc, char *argv[])
     };
 
     printProcessMemory("after model + optimizer build");
+    mcuSimPrintStatus("after model + optimizer");
     printMemoryBreakdown();
 
     /* ── RigL: initialise sparse masks ───────────────────────────── */
@@ -631,11 +774,61 @@ int main(int argc, char *argv[])
     riglInit(model);
     printModelSummary(model);
     printProcessMemory("after RigL mask init");
+    mcuSimPrintStatus("after RigL masks");
+
+    /* ── Activation stack cost (inference-only vs training) ─────────
+     * CalculateGradsSequential allocates VLAs on the stack for all
+     * (MODEL_SIZE+1) layer outputs at BATCH_SIZE.  This is extra RAM
+     * on top of the heap tracked above.                              */
+    {
+        size_t act_per_sample =
+            (size_t)(INPUT_T * INPUT_C)                  /* input        */
+          + (size_t)(INPUT_T * CONV1_F)                  /* conv1 out    */
+          + (size_t)(INPUT_T/2 * CONV1_F)                /* pool1 out    */
+          + (size_t)(INPUT_T/2 * CONV1_F)                /* relu1        */
+          + (size_t)(INPUT_T/2 * CONV2_F)                /* conv2 out    */
+          + (size_t)(INPUT_T/4 * CONV2_F)                /* pool2 out    */
+          + (size_t)(INPUT_T/4 * CONV2_F)                /* relu2        */
+          + (size_t)(INPUT_T/4 * CONV3_F)                /* conv3 out    */
+          + (size_t)(CONV3_F)                            /* avgpool out  */
+          + (size_t)(CONV3_F)                            /* relu3        */
+          + (size_t)(CONV3_F)                            /* flatten      */
+          + (size_t)(NUM_CLS)                            /* linear out   */
+          + (size_t)(NUM_CLS);                           /* softmax out  */
+        size_t act_train_kb = act_per_sample * BATCH_SIZE * sizeof(float) / 1024;
+        size_t act_infer_kb = act_per_sample * 1          * sizeof(float) / 1024;
+        size_t heap_kb      = mcuSimGetTotal() / 1024;
+
+        printf("\n┌─────────────────────────────────────────────────────┐\n");
+        printf("│           MCU SRAM Budget (320 KB limit)            │\n");
+        printf("├──────────────────────────────────┬──────────────────┤\n");
+        printf("│ Component                        │ Size             │\n");
+        printf("├──────────────────────────────────┼──────────────────┤\n");
+        printf("│ Heap (weights+grads+momentum+cfg)│ %6zu KB        │\n", heap_kb);
+        printf("│ Activations — inference (batch=1)│ %6zu KB        │\n", act_infer_kb);
+        printf("│ Activations — training  (batch=%-2d)│ %6zu KB       │\n", BATCH_SIZE, act_train_kb);
+        printf("├──────────────────────────────────┼──────────────────┤\n");
+        printf("│ TOTAL (inference)                │ %6zu KB / 320  │\n", heap_kb + act_infer_kb);
+        printf("│ TOTAL (training)                 │ %6zu KB / 320  │\n", heap_kb + act_train_kb);
+        printf("└──────────────────────────────────┴──────────────────┘\n\n");
+    }
+
+    /* ── Pre-compute total RigL update steps for cosine decay ───────
+     * batches_per_epoch = ceil(train_samples / BATCH_SIZE)
+     * total_rigl_steps  = NUM_EPOCHS * batches_per_epoch / RIGL_DELTA_T */
+    {
+        size_t n_train     = g_trainStream.n_samples;
+        size_t batches_per = (n_train + BATCH_SIZE - 1) / BATCH_SIZE;
+        g_rigl_t_end = (int)((NUM_EPOCHS * batches_per) / RIGL_DELTA_T);
+        if (g_rigl_t_end < 1) g_rigl_t_end = 1;
+        printf("[RigL] Cosine decay: frac_0=%.2f  total_updates=%d\n\n",
+               (double)RIGL_FRAC, g_rigl_t_end);
+    }
 
     /* ── Training loop ───────────────────────────────────────────── */
-    printf("\n%-6s  %-10s  %-10s  %-10s  %-8s\n",
-           "Epoch", "TrainLoss", "ValLoss", "ValAcc", "Wall(s)");
-    printf("──────  ──────────  ──────────  ──────────  ────────\n");
+    printf("%-6s  %-10s  %-10s  %-10s  %-8s  %-8s\n",
+           "Epoch", "TrainLoss", "ValLoss", "ValAcc", "Wall(s)", "Frac");
+    printf("──────  ──────────  ──────────  ──────────  ────────  ────────\n");
 
     size_t batchCounter = 0;
     struct timespec t0, t1;
@@ -655,12 +848,14 @@ int main(int argc, char *argv[])
         double wall = (double)(t1.tv_sec  - t0.tv_sec) +
                       (double)(t1.tv_nsec - t0.tv_nsec) * 1e-9;
 
-        printf("%-6zu  %-10.4f  %-10.4f  %-10.4f  %-8.2f",
+        float cur_frac = riglDecayedFrac(g_rigl_step, g_rigl_t_end);
+        printf("%-6zu  %-10.4f  %-10.4f  %-10.4f  %-8.2f  %-8.4f",
                epoch,
                (double)trainLoss,
                (double)valStats.loss,
                (double)valStats.accuracy,
-               wall);
+               wall,
+               (double)cur_frac);
 
         /* Print RSS inline every epoch — cheap call, one line */
         {

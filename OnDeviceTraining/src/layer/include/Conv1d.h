@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#include "ArithmeticType.h"
+#include "ExecuteOp.h"
 #include "Kernel.h"
 #include "Layer.h"
 #include "Tensor.h"
@@ -13,11 +15,20 @@ typedef struct conv1dConfig {
     parameter_t *weights; // [Cout, Cin/groups, K]
     parameter_t *bias;    // [Cout] or NULL
     size_t groups;        // must divide Cin and Cout
-    quantization_t *forwardQ;
-    quantization_t *weightGradQ;
-    quantization_t *biasGradQ;
-    quantization_t *propLossQ;
-    bool ownsQuantizations;
+
+    arithmetic_t forwardMath;    /* declared forward compute representation */
+    arithmetic_t weightGradMath; /* declared weight-grad ARITHMETIC */
+    arithmetic_t biasGradMath;   /* declared bias-grad ARITHMETIC */
+    arithmetic_t propLossMath;   /* declared dx-wire ARITHMETIC (kernel selection) */
+
+    quantization_t *outputQ;   /* produced forward-wire storage config */
+    quantization_t *propLossQ; /* storage config of the produced dx-wire buffer */
+
+    outputMode_t weightGradAccMode; /* weight-grad executeOp accumulate mode (PR3 spec D1) */
+    outputMode_t biasGradAccMode;   /* bias-grad executeOp accumulate mode (PR3 spec D1) */
+
+    bool ownsQuantizations; /* true -> free* will tear down outputQ/propLossQ and their
+                               qConfigs */
 } conv1dConfig_t;
 
 void initConv1dConfigWithWeightsAndBias(conv1dConfig_t *conv1dConfig, kernel_t *kernel,
@@ -26,11 +37,11 @@ void initConv1dConfigWithWeightsAndBias(conv1dConfig_t *conv1dConfig, kernel_t *
                                         quantization_t *biasGradQ, quantization_t *propLossQ);
 
 void conv1dForward(layer_t *layer, tensor_t *input, tensor_t *output);
-void conv1dForwardFloat(layer_t *layer, tensor_t *input, tensor_t *output);
 
 void conv1dBackward(layer_t *layer, tensor_t *forwardInput, tensor_t *lossGrad, tensor_t *propLoss);
-void conv1dBackwardFloat(layer_t *layer, tensor_t *forwardInput, tensor_t *lossGrad,
-                         tensor_t *propLoss);
+
+void conv1dCalcWeightGradsSymInt32(conv1dConfig_t *cfg, tensor_t *forwardInput, tensor_t *lossGrad);
+void conv1dCalcBiasGradsSymInt32(conv1dConfig_t *cfg, tensor_t *lossGrad);
 
 void conv1dCalcOutputShape(layer_t *layer, shape_t *inputShape, shape_t *outputShape);
 

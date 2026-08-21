@@ -2,16 +2,21 @@
 
 #include <stddef.h>
 
+#include "ArithmeticType.h"
+#include "BorrowedLayer.h"
 #include "CalculateGradsSequential.h"
 #include "DataLoaderApi.h"
 #include "Dataset.h"
+#include "DeathTest.h"
 #include "InferenceApi.h"
 #include "Linear.h"
 #include "LinearApi.h"
 #include "LossFunction.h"
+#include "LrScheduler.h"
 #include "OptimizerApi.h"
 #include "QuantizationApi.h"
 #include "ReluApi.h"
+#include "Sgd.h"
 #include "SgdApi.h"
 #include "StorageApi.h"
 #include "Tensor.h"
@@ -21,6 +26,17 @@
 #include "TrainingEpochDefault.h"
 #include "TrainingLoopApi.h"
 #include "unity.h"
+
+/* #327 contract: trainingRun takes the NULL-able scheduler directly after
+ * the optimizer (arg 7). Compile-time pin. */
+_Static_assert(_Generic(&trainingRun,
+                   trainingRunResult_t (*)(layer_t **, size_t, lossConfig_t, dataLoader_t *,
+                                           dataLoader_t *, optimizer_t *, lrScheduler_t *, size_t,
+                                           calculateGradsFn_t, inferenceWithLossFn_t,
+                                           epochCallbackFn_t): 1,
+                   default: 0),
+               "#327: trainingRun must be (model, modelSize, lossConfig, trainDl, evalDl, "
+               "optimizer, scheduler, numberOfEpochs, calculateGradsFn, inferenceFn, callback)");
 
 /* Build a fresh 2-D float tensor from a literal float buffer. Encapsulates the
  * post-#106 chain so each test stays readable. */
@@ -48,7 +64,7 @@ void testCalculateGradsSequential_MatchesPyTorch() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(weights, bias, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(weights, bias, &testQ);
 
     layer_t *model[] = {linear};
     size_t sizeModel = 1;
@@ -61,12 +77,14 @@ void testCalculateGradsSequential_MatchesPyTorch() {
     tensor_t *label1 = buildFloatTensor2D(1, 2, (float[]){43.f, 249.f}, 2);
     tensor_t *label2 = buildFloatTensor2D(1, 2, (float[]){23.f, 457.f}, 2);
 
-    optimizer_t *sgd = sgdMCreateOptim(0.01f, 0.f, 0.f, model, sizeModel, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.01f, 0.f, 0.f, model, sizeModel, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
     optimizerFunctions_t sgdFns = optimizerFunctions[SGD_M];
     /* Pre-existing test hack: only step weights, leaving bias unchanged across
-     * iterations. We restore sizeStates to 2 before the free below so
-     * freeOptimSgdM cascades to BOTH registered parameters and their state
-     * buffers (otherwise parameter[1]/states[1] would leak). */
+     * iterations. freeOptim frees the registered parameters; no state
+     * buffers exist at momentum==0 (#308). */
     sgd->sizeStates = 1;
 
     for (size_t i = 0; i < 23; i++) {
@@ -106,17 +124,18 @@ void testCalculateGradsSequential_MatchesPyTorch() {
         }
     }
 
-    /* FREE in reverse-init order. Restore sizeStates so freeOptimSgdM cascades
+    /* FREE in reverse-init order. Restore sizeStates so freeOptim cascades
      * to both weights and bias parameters + their state buffers. */
     sgd->sizeStates = 2;
-    freeOptimSgdM(sgd);
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
     freeTensor(label2);
     freeTensor(label1);
     freeTensor(label0);
     freeTensor(input2);
     freeTensor(input1);
     freeTensor(input0);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
 
     /* ASSERT on captured. */
     const float errorPercent = 0.03f;
@@ -138,7 +157,7 @@ void testEvaluationBatch_ReturnsAverageLoss() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     /* Create 2 samples manually */
@@ -180,7 +199,7 @@ void testEvaluationBatch_ReturnsAverageLoss() {
     freeTensor(input1);
     freeTensor(label0);
     freeTensor(input0);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
 
@@ -269,7 +288,7 @@ void testEvaluationEpoch_ReturnsAverageLossAcrossBatches() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     dataLoader_t *dl =
@@ -282,7 +301,7 @@ void testEvaluationEpoch_ReturnsAverageLossAcrossBatches() {
 
     /* FREE. */
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
     freeEpochDataset();
@@ -310,7 +329,7 @@ void testEvaluationEpoch_MinibatchMatchesMicrobatchAverage() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     /* batchSize=2 → 2 minibatches of 2 samples each
@@ -326,7 +345,7 @@ void testEvaluationEpoch_MinibatchMatchesMicrobatchAverage() {
 
     /* FREE. */
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
     freeEpochDataset();
@@ -347,7 +366,7 @@ void testTrainingBatchDefault_ReturnsAverageLossAndAccumulatesGrads() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     /* Compute expected: run calculateGradsSequential manually per sample */
@@ -402,7 +421,7 @@ void testTrainingBatchDefault_ReturnsAverageLossAndAccumulatesGrads() {
     freeTensor(in1);
     freeTensor(lb0);
     freeTensor(in0);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
 
@@ -421,7 +440,7 @@ void testTrainingBatchDefault_SumAggregatesWithoutDivision() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     tensor_t *in0 = buildFloatTensor2D(1, 3, (float[]){-4.f, 1.f, 9.f}, 3);
@@ -469,7 +488,7 @@ void testTrainingBatchDefault_SumAggregatesWithoutDivision() {
     freeTensor(in1);
     freeTensor(lb0);
     freeTensor(in0);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
 
@@ -490,7 +509,7 @@ void testTrainingEpochDefault_DoesOptimizerStepPerBatch() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
     size_t sizeModel = 1;
 
@@ -500,7 +519,10 @@ void testTrainingEpochDefault_DoesOptimizerStepPerBatch() {
         initWeights[i] = wInitData[i];
     }
 
-    optimizer_t *sgd = sgdMCreateOptim(0.01f, 0.f, 0.f, model, sizeModel, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.01f, 0.f, 0.f, model, sizeModel, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
 
     /* Use epoch dataset (batchSize=1 → 4 batches) */
     initEpochDataset();
@@ -524,11 +546,12 @@ void testTrainingEpochDefault_DoesOptimizerStepPerBatch() {
     }
     float capturedEpochLoss = epochLoss;
 
-    /* FREE. freeOptimSgdM cascades to w and b parameters; do NOT also free
+    /* FREE. freeOptim cascades to w and b parameters; do NOT also free
      * those (would double-free). */
-    freeOptimSgdM(sgd);
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeEpochDataset();
 
     /* ASSERT. */
@@ -553,7 +576,7 @@ void testTrainingEpochDefault_MinibatchStepsOncePerMinibatch() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
     size_t sizeModel = 1;
 
@@ -562,7 +585,10 @@ void testTrainingEpochDefault_MinibatchStepsOncePerMinibatch() {
         initWeights[i] = wInitData[i];
     }
 
-    optimizer_t *sgd = sgdMCreateOptim(0.01f, 0.f, 0.f, model, sizeModel, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.01f, 0.f, 0.f, model, sizeModel, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
 
     initEpochDataset();
     dataLoader_t *dl =
@@ -586,9 +612,10 @@ void testTrainingEpochDefault_MinibatchStepsOncePerMinibatch() {
     float capturedEpochLoss = epochLoss;
 
     /* FREE. */
-    freeOptimSgdM(sgd);
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeEpochDataset();
 
     /* ASSERT. */
@@ -607,10 +634,13 @@ void testTrainingRun_ReturnsResult() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
-    optimizer_t *sgd = sgdMCreateOptim(0.01f, 0.f, 0.f, model, 1, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.01f, 0.f, 0.f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
 
     initEpochDataset();
     dataLoader_t *trainDl =
@@ -618,9 +648,9 @@ void testTrainingRun_ReturnsResult() {
     dataLoader_t *evalDl =
         dataLoaderInit(getEpochSample, getEpochDatasetSize, 1, NULL, NULL, false, 0, true);
 
-    trainingRunResult_t result =
-        trainingRun(model, 1, (lossConfig_t){.funcType = MSE, .backwardReduction = REDUCTION_SUM},
-                    trainDl, evalDl, sgd, 2, calculateGradsSequential, inferenceWithLoss, NULL);
+    trainingRunResult_t result = trainingRun(
+        model, 1, (lossConfig_t){.funcType = MSE, .backwardReduction = REDUCTION_SUM}, trainDl,
+        evalDl, sgd, NULL, 2, calculateGradsSequential, inferenceWithLoss, NULL);
 
     /* CAPTURE. */
     float capturedFinalTrainLoss = result.finalTrainLoss;
@@ -628,10 +658,11 @@ void testTrainingRun_ReturnsResult() {
     float capturedAccuracy = result.finalEvalStats.accuracy;
 
     /* FREE. */
-    freeOptimSgdM(sgd);
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
     freeDataLoader(evalDl);
     freeDataLoader(trainDl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeEpochDataset();
 
     /* ASSERT. */
@@ -669,10 +700,13 @@ void testTrainingRun_CallsCallbackEachEpochWithStats() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
-    optimizer_t *sgd = sgdMCreateOptim(0.01f, 0.f, 0.f, model, 1, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.01f, 0.f, 0.f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
 
     initEpochDataset();
     dataLoader_t *trainDl =
@@ -681,9 +715,10 @@ void testTrainingRun_CallsCallbackEachEpochWithStats() {
         dataLoaderInit(getEpochSample, getEpochDatasetSize, 1, NULL, NULL, false, 0, true);
 
     size_t numberOfEpochs = 3;
-    trainingRunResult_t result = trainingRun(
-        model, 1, (lossConfig_t){.funcType = MSE, .backwardReduction = REDUCTION_SUM}, trainDl,
-        evalDl, sgd, numberOfEpochs, calculateGradsSequential, inferenceWithLoss, captureCallback);
+    trainingRunResult_t result =
+        trainingRun(model, 1, (lossConfig_t){.funcType = MSE, .backwardReduction = REDUCTION_SUM},
+                    trainDl, evalDl, sgd, NULL, numberOfEpochs, calculateGradsSequential,
+                    inferenceWithLoss, captureCallback);
 
     /* CAPTURE. */
     size_t capturedCbCallCount = cbCallCount;
@@ -696,10 +731,11 @@ void testTrainingRun_CallsCallbackEachEpochWithStats() {
     float capturedFinalEvalAccuracy = result.finalEvalStats.accuracy;
 
     /* FREE. */
-    freeOptimSgdM(sgd);
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
     freeDataLoader(evalDl);
     freeDataLoader(trainDl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeEpochDataset();
 
     /* ASSERT. Callback was invoked once per epoch, in order. */
@@ -712,6 +748,97 @@ void testTrainingRun_CallsCallbackEachEpochWithStats() {
     TEST_ASSERT_EQUAL_FLOAT(capturedFinalTrainLoss, capturedCbLastTrainLoss);
     TEST_ASSERT_EQUAL_FLOAT(capturedFinalEvalLoss, capturedCbLastStatsLoss);
     TEST_ASSERT_EQUAL_FLOAT(capturedFinalEvalAccuracy, capturedCbLastStatsAccuracy);
+}
+
+/* Build a fresh 2-D SYM_INT32 (int12, HALF_AWAY) tensor quantized from a
+ * float buffer — for hand-wired SYM layers (#206 acceptance path). */
+static tensor_t *buildSymTensor2D(size_t d0, size_t d1, const float *src, size_t count) {
+    size_t *dims = reserveMemory(2 * sizeof(size_t));
+    dims[0] = d0;
+    dims[1] = d1;
+    size_t *order = reserveMemory(2 * sizeof(size_t));
+    setOrderOfDimsForNewTensor(2, order);
+    shape_t *shape = reserveMemory(sizeof(shape_t));
+    setShape(shape, dims, 2, order);
+    tensor_t *t = initTensor(shape, quantizationInitSymInt32(HALF_AWAY), NULL);
+    tensorFillFromFloatBuffer(t, src, count);
+    return t;
+}
+
+/* Single-sample dataset with NEGATIVE features: on a SYM output wire the
+ * mantissas are negative, and reading them as float* reinterprets the int32
+ * codes as NaN bit patterns (sign+all-ones-exponent), freezing a naive float
+ * argmax at index 0. True argmax is index 1 (-0.5 > -1.0). */
+static tensor_t *symMetricsItem;
+static tensor_t *symMetricsLabel;
+static bool symMetricsDatasetInit = false;
+
+static void initSymMetricsDataset() {
+    if (symMetricsDatasetInit) {
+        return;
+    }
+    symMetricsItem = buildFloatTensor2D(1, 2, (float[]){-1.f, -0.5f}, 2);
+    symMetricsLabel = buildFloatTensor2D(1, 2, (float[]){0.f, 1.f}, 2);
+    symMetricsDatasetInit = true;
+}
+
+static void freeSymMetricsDataset() {
+    if (!symMetricsDatasetInit) {
+        return;
+    }
+    freeTensor(symMetricsItem);
+    freeTensor(symMetricsLabel);
+    symMetricsDatasetInit = false;
+}
+
+static sample_t *getSymMetricsSample(size_t id) {
+    (void)id;
+    sample_t *s = reserveMemory(sizeof(sample_t));
+    s->item = symMetricsItem;
+    s->label = symMetricsLabel;
+    return s;
+}
+
+static size_t getSymMetricsDatasetSize() {
+    return 1;
+}
+
+/* #206 acceptance prerequisite: with a SYM_INT32 output wire (full-SYM
+ * classifier head), the metrics argmax must read int32 mantissas — mantissa
+ * order IS value order (scale > 0), while a float* cast garbles it. Identity
+ * SYM linear reproduces the (negative) input on the wire; the label points at
+ * class 1, so a correct argmax yields accuracy 1.0. */
+void testEvaluationEpochWithMetrics_SymOutputWire() {
+    initSymMetricsDataset();
+
+    tensor_t *wParam = buildSymTensor2D(2, 2, (float[]){1.f, 0.f, 0.f, 1.f}, 4);
+    tensor_t *wGrad = gradInitFloat(wParam, NULL);
+    parameter_t *w = parameterInit(wParam, wGrad);
+
+    tensor_t *bParam = buildSymTensor2D(1, 2, (float[]){0.f, 0.f}, 2);
+    tensor_t *bGrad = gradInitFloat(bParam, NULL);
+    parameter_t *b = parameterInit(bParam, bGrad);
+
+    quantization_t *symQ = quantizationInitSymInt32(HALF_AWAY);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, symQ);
+    layer_t *model[] = {linear};
+
+    dataLoader_t *dl = dataLoaderInit(getSymMetricsSample, getSymMetricsDatasetSize, 1, NULL, NULL,
+                                      false, 0, true);
+
+    epochStats_t stats =
+        evaluationEpochWithMetrics(model, 1, MSE, dl, inferenceWithLoss, REDUCTION_MEAN);
+
+    float capturedAccuracy = stats.accuracy;
+
+    freeDataLoader(dl);
+    freeLinearLayerShellOnly(linear);
+    freeParameter(b);
+    freeParameter(w);
+    freeQuantization(symQ);
+    freeSymMetricsDataset();
+
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.0f, capturedAccuracy);
 }
 
 void testEvaluationEpochWithMetrics_AllCorrect() {
@@ -727,7 +854,7 @@ void testEvaluationEpochWithMetrics_AllCorrect() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     dataLoader_t *dl =
@@ -746,7 +873,7 @@ void testEvaluationEpochWithMetrics_AllCorrect() {
 
     /* FREE. */
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
     freeEpochDataset();
@@ -837,11 +964,14 @@ void testTrainingEpochDefault_MeanScalesGradByOneOverNF() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     /* momentumFactor=0 makes SGD_M behave like plain SGD. */
-    optimizer_t *sgd = sgdMCreateOptim(0.01f, 0.f, 0.f, model, 1, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.01f, 0.f, 0.f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
 
     initSingleSampleDataset();
     dataLoader_t *dl =
@@ -856,9 +986,10 @@ void testTrainingEpochDefault_MeanScalesGradByOneOverNF() {
     float capturedW00 = ((float *)wParam->data)[0];
     float capturedW01 = ((float *)wParam->data)[1];
 
-    freeOptimSgdM(sgd);
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeSingleSampleDataset();
 
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.995f, capturedW00);
@@ -940,7 +1071,7 @@ void testEvaluationEpochWithMetrics_PartiallyCorrect() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     dataLoader_t *dl =
@@ -957,7 +1088,7 @@ void testEvaluationEpochWithMetrics_PartiallyCorrect() {
 
     /* FREE. */
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
     freePartialDataset();
@@ -1048,7 +1179,7 @@ void testEvaluationEpochWithMetrics_HandlesZeroPredictionClass() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     dataLoader_t *dl =
@@ -1065,7 +1196,7 @@ void testEvaluationEpochWithMetrics_HandlesZeroPredictionClass() {
 
     /* FREE. */
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
     freeZeroPredDataset();
@@ -1103,7 +1234,7 @@ void testEvaluationEpochWithReport_ReturnsConfusionMatrix() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     dataLoader_t *dl =
@@ -1124,7 +1255,7 @@ void testEvaluationEpochWithReport_ReturnsConfusionMatrix() {
 
     /* FREE. */
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
     freePartialDataset();
@@ -1155,7 +1286,7 @@ void testInferenceWithLoss_PropagatesForwardReductionSum() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     tensor_t *input = buildFloatTensor2D(1, 2, (float[]){5.f, 1.f}, 2);
@@ -1172,7 +1303,7 @@ void testInferenceWithLoss_PropagatesForwardReductionSum() {
     freeInferenceStats(meanStats);
     freeTensor(label);
     freeTensor(input);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
 
@@ -1196,12 +1327,15 @@ void testTrainingEpochDefault_SumBackwardSkipsOptimizerScaling() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     /* Use a very small learning rate so SUM doesn't NaN — SUM gradients are
      * larger by N*F than MEAN gradients on the same data. */
-    optimizer_t *sgd = sgdMCreateOptim(0.001f, 0.f, 0.f, model, 1, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.001f, 0.f, 0.f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
 
     initEpochDataset();
     dataLoader_t *dl =
@@ -1227,9 +1361,10 @@ void testTrainingEpochDefault_SumBackwardSkipsOptimizerScaling() {
     bool capturedFinite = (epochLoss == epochLoss) && (epochLoss != 1.0f / 0.0f);
     float capturedEpochLoss = epochLoss;
 
-    freeOptimSgdM(sgd);
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeEpochDataset();
 
     TEST_ASSERT_TRUE(capturedChanged);
@@ -1253,10 +1388,13 @@ void testTrainingEpochDefault_MeanForwardSumBackward_MixedCombination() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
-    optimizer_t *sgd = sgdMCreateOptim(0.001f, 0.f, 0.f, model, 1, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.001f, 0.f, 0.f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
 
     initEpochDataset();
     dataLoader_t *dl =
@@ -1282,9 +1420,10 @@ void testTrainingEpochDefault_MeanForwardSumBackward_MixedCombination() {
     bool capturedFinite = (epochLoss == epochLoss) && (epochLoss != 1.0f / 0.0f);
     float capturedEpochLoss = epochLoss;
 
-    freeOptimSgdM(sgd);
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeEpochDataset();
 
     TEST_ASSERT_TRUE(capturedChanged);
@@ -1306,7 +1445,7 @@ void testEvaluationEpoch_FlatAggregator_DivisionByTotalSamples() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     /* batchSize=2 → 2 batches of 2 samples; per-sample MSE losses are
@@ -1323,7 +1462,7 @@ void testEvaluationEpoch_FlatAggregator_DivisionByTotalSamples() {
     float capturedMean = meanLoss;
 
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
     freeEpochDataset();
@@ -1343,7 +1482,7 @@ void testEvaluationEpoch_SumPath_ReturnsRawTotal() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
     dataLoader_t *dl =
@@ -1356,7 +1495,7 @@ void testEvaluationEpoch_SumPath_ReturnsRawTotal() {
     float capturedSum = sumLoss;
 
     freeDataLoader(dl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeParameter(b);
     freeParameter(w);
     freeEpochDataset();
@@ -1380,10 +1519,13 @@ void testTrainingRun_HardcodesForwardReductionMean() {
 
     quantization_t testQ;
     initFloat32Quantization(&testQ);
-    layer_t *linear = linearLayerInitLegacy(w, b, &testQ, &testQ, &testQ, &testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
     layer_t *model[] = {linear};
 
-    optimizer_t *sgd = sgdMCreateOptim(0.01f, 0.f, 0.f, model, 1, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.01f, 0.f, 0.f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
 
     initEpochDataset();
     dataLoader_t *trainDl =
@@ -1397,16 +1539,17 @@ void testTrainingRun_HardcodesForwardReductionMean() {
      * eval loss would be F× larger than train loss, failing the assertion below. */
     lossConfig_t cfg = defaultLossConfig(MSE);
 
-    trainingRunResult_t result = trainingRun(model, 1, cfg, trainDl, evalDl, sgd, 2,
+    trainingRunResult_t result = trainingRun(model, 1, cfg, trainDl, evalDl, sgd, NULL, 2,
                                              calculateGradsSequential, inferenceWithLoss, NULL);
 
     float capturedTrain = result.finalTrainLoss;
     float capturedEval = result.finalEvalStats.loss;
 
-    freeOptimSgdM(sgd);
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
     freeDataLoader(evalDl);
     freeDataLoader(trainDl);
-    freeLinearLayerLegacy(linear);
+    freeLinearLayerShellOnly(linear);
     freeEpochDataset();
 
     TEST_ASSERT_TRUE(capturedTrain > 0.0f && capturedTrain < 100.0f);
@@ -1414,6 +1557,200 @@ void testTrainingRun_HardcodesForwardReductionMean() {
     /* MEAN-vs-MEAN comparability: ratio within an order of magnitude. */
     TEST_ASSERT_TRUE(capturedEval / capturedTrain < 10.0f);
     TEST_ASSERT_TRUE(capturedTrain / capturedEval < 10.0f);
+}
+
+static float g_lrCapture[8];
+static size_t g_lrCaptureCount = 0;
+static optimizer_t *g_capturedOptim = NULL;
+
+static void captureLrCallback(size_t epoch, float trainLoss, epochStats_t evalStats) {
+    (void)epoch;
+    (void)trainLoss;
+    (void)evalStats;
+    if (g_lrCaptureCount < 8) {
+        g_lrCapture[g_lrCaptureCount++] = optimizerFunctions[SGD_M].getLr(g_capturedOptim);
+    }
+}
+
+void testTrainingRunStepsSchedulerOncePerEpoch(void) {
+    tensor_t *wParam = buildFloatTensor2D(2, 2, (float[]){1.f, 0.f, 0.f, 1.f}, 4);
+    tensor_t *wGrad = gradInitFloat(wParam, NULL);
+    parameter_t *w = parameterInit(wParam, wGrad);
+
+    tensor_t *bParam = buildFloatTensor2D(1, 2, (float[]){0.f, 0.f}, 2);
+    tensor_t *bGrad = gradInitFloat(bParam, NULL);
+    parameter_t *b = parameterInit(bParam, bGrad);
+
+    quantization_t testQ;
+    initFloat32Quantization(&testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
+    layer_t *model[] = {linear};
+
+    quantization_t *momentumQ = quantizationInitFloat();
+    /* base 0.4f halved twice: *0.25 is a power-of-two scale -> exact float */
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.4f, 0.f, 0.f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
+
+    initEpochDataset();
+    dataLoader_t *trainDl =
+        dataLoaderInit(getEpochSample, getEpochDatasetSize, 1, NULL, NULL, false, 0, true);
+    dataLoader_t *evalDl =
+        dataLoaderInit(getEpochSample, getEpochDatasetSize, 1, NULL, NULL, false, 0, true);
+
+    lrScheduler_t sched;
+    stepLrInit(&sched, sgd, 1, 0.5f); /* halve every epoch */
+    trainingRunResult_t result = trainingRun(
+        model, 1, (lossConfig_t){.funcType = MSE, .backwardReduction = REDUCTION_SUM}, trainDl,
+        evalDl, sgd, &sched, 2, calculateGradsSequential, inferenceWithLoss, NULL);
+    (void)result;
+    /* base 0.4f halved twice: *0.25 is a power-of-two scale -> exact float */
+    TEST_ASSERT_EQUAL_FLOAT(0.4f * 0.25f, optimizerFunctions[SGD_M].getLr(sgd));
+
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
+    freeDataLoader(evalDl);
+    freeDataLoader(trainDl);
+    freeLinearLayerShellOnly(linear);
+    freeEpochDataset();
+}
+
+void testTrainingRunNullSchedulerKeepsLrConstant(void) {
+    tensor_t *wParam = buildFloatTensor2D(2, 2, (float[]){1.f, 0.f, 0.f, 1.f}, 4);
+    tensor_t *wGrad = gradInitFloat(wParam, NULL);
+    parameter_t *w = parameterInit(wParam, wGrad);
+
+    tensor_t *bParam = buildFloatTensor2D(1, 2, (float[]){0.f, 0.f}, 2);
+    tensor_t *bGrad = gradInitFloat(bParam, NULL);
+    parameter_t *b = parameterInit(bParam, bGrad);
+
+    quantization_t testQ;
+    initFloat32Quantization(&testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
+    layer_t *model[] = {linear};
+
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.01f, 0.f, 0.f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
+
+    initEpochDataset();
+    dataLoader_t *trainDl =
+        dataLoaderInit(getEpochSample, getEpochDatasetSize, 1, NULL, NULL, false, 0, true);
+    dataLoader_t *evalDl =
+        dataLoaderInit(getEpochSample, getEpochDatasetSize, 1, NULL, NULL, false, 0, true);
+
+    float lrBefore = optimizerFunctions[SGD_M].getLr(sgd);
+    trainingRunResult_t result = trainingRun(
+        model, 1, (lossConfig_t){.funcType = MSE, .backwardReduction = REDUCTION_SUM}, trainDl,
+        evalDl, sgd, NULL, 2, calculateGradsSequential, inferenceWithLoss, NULL);
+    (void)result;
+    TEST_ASSERT_EQUAL_FLOAT(lrBefore, optimizerFunctions[SGD_M].getLr(sgd));
+
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
+    freeDataLoader(evalDl);
+    freeDataLoader(trainDl);
+    freeLinearLayerShellOnly(linear);
+    freeEpochDataset();
+}
+
+void testTrainingRunRejectsSchedulerWiredToDifferentOptimizer(void) {
+    tensor_t *wParam = buildFloatTensor2D(2, 2, (float[]){1.f, 0.f, 0.f, 1.f}, 4);
+    tensor_t *wGrad = gradInitFloat(wParam, NULL);
+    parameter_t *w = parameterInit(wParam, wGrad);
+
+    tensor_t *bParam = buildFloatTensor2D(1, 2, (float[]){0.f, 0.f}, 2);
+    tensor_t *bGrad = gradInitFloat(bParam, NULL);
+    parameter_t *b = parameterInit(bParam, bGrad);
+
+    quantization_t testQ;
+    initFloat32Quantization(&testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
+    layer_t *model[] = {linear};
+
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.01f, 0.f, 0.f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
+
+    initEpochDataset();
+    dataLoader_t *trainDl =
+        dataLoaderInit(getEpochSample, getEpochDatasetSize, 1, NULL, NULL, false, 0, true);
+    dataLoader_t *evalDl =
+        dataLoaderInit(getEpochSample, getEpochDatasetSize, 1, NULL, NULL, false, 0, true);
+
+    /* A second, unrelated optimizer the scheduler is (wrongly) wired to. */
+    sgd_t otherSgd;
+    sgdInit(&otherSgd, 0.1f, 0.0f, 0.0f,
+            (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
+    optimImpl_t otherImpl = {.sgd = &otherSgd};
+    optimizer_t otherOptim = {
+        .type = SGD_M, .impl = &otherImpl, .parameter = NULL, .states = NULL, .sizeStates = 0};
+    lrScheduler_t sched;
+    stepLrInit(&sched, &otherOptim, 1, 0.5f);
+    ASSERT_EXITS_WITH_FAILURE(trainingRun(
+        model, 1, (lossConfig_t){.funcType = MSE, .backwardReduction = REDUCTION_SUM}, trainDl,
+        evalDl, sgd, &sched, 1, calculateGradsSequential, inferenceWithLoss, NULL));
+
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
+    freeDataLoader(evalDl);
+    freeDataLoader(trainDl);
+    freeLinearLayerShellOnly(linear);
+    freeEpochDataset();
+}
+
+void testTrainingRunCallbackObservesTheEpochsOwnLr(void) {
+    /* API contract (TrainingLoopApi.h): the scheduler steps AFTER the epoch
+     * callback, so a callback logging the LR reports the value the epoch
+     * TRAINED with. har's per-epoch lr JSON logging is load-bearing on this
+     * ordering; stepping before the callback would corrupt experiment logs
+     * silently (each epoch reporting the NEXT epoch's LR). */
+    tensor_t *wParam = buildFloatTensor2D(2, 2, (float[]){1.f, 0.f, 0.f, 1.f}, 4);
+    tensor_t *wGrad = gradInitFloat(wParam, NULL);
+    parameter_t *w = parameterInit(wParam, wGrad);
+
+    tensor_t *bParam = buildFloatTensor2D(1, 2, (float[]){0.f, 0.f}, 2);
+    tensor_t *bGrad = gradInitFloat(bParam, NULL);
+    parameter_t *b = parameterInit(bParam, bGrad);
+
+    quantization_t testQ;
+    initFloat32Quantization(&testQ);
+    layer_t *linear = buildBorrowedLinearLayer(w, b, &testQ);
+    layer_t *model[] = {linear};
+
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *sgd =
+        sgdMCreateOptim(0.4f, 0.f, 0.f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
+
+    initEpochDataset();
+    dataLoader_t *trainDl =
+        dataLoaderInit(getEpochSample, getEpochDatasetSize, 1, NULL, NULL, false, 0, true);
+    dataLoader_t *evalDl =
+        dataLoaderInit(getEpochSample, getEpochDatasetSize, 1, NULL, NULL, false, 0, true);
+
+    g_lrCaptureCount = 0;
+    g_capturedOptim = sgd;
+    lrScheduler_t sched;
+    stepLrInit(&sched, sgd, 1, 0.5f);
+    trainingRunResult_t result = trainingRun(
+        model, 1, (lossConfig_t){.funcType = MSE, .backwardReduction = REDUCTION_SUM}, trainDl,
+        evalDl, sgd, &sched, 3, calculateGradsSequential, inferenceWithLoss, captureLrCallback);
+    (void)result;
+    TEST_ASSERT_EQUAL_size_t(3, g_lrCaptureCount);
+    /* halving by 0.5 is exponent-only: exact floats */
+    TEST_ASSERT_EQUAL_FLOAT(0.4f, g_lrCapture[0]);
+    TEST_ASSERT_EQUAL_FLOAT(0.4f * 0.5f, g_lrCapture[1]);
+    TEST_ASSERT_EQUAL_FLOAT(0.4f * 0.25f, g_lrCapture[2]);
+
+    freeOptim(sgd);
+    freeQuantization(momentumQ);
+    freeDataLoader(evalDl);
+    freeDataLoader(trainDl);
+    freeLinearLayerShellOnly(linear);
+    freeEpochDataset();
 }
 
 void setUp() {}
@@ -1434,6 +1771,7 @@ int main(void) {
     RUN_TEST(testTrainingEpochDefault_MeanForwardSumBackward_MixedCombination);
     RUN_TEST(testTrainingRun_ReturnsResult);
     RUN_TEST(testEvaluationEpochWithMetrics_AllCorrect);
+    RUN_TEST(testEvaluationEpochWithMetrics_SymOutputWire);
     RUN_TEST(testEvaluationEpochWithMetrics_PartiallyCorrect);
     RUN_TEST(testEvaluationEpochWithMetrics_HandlesZeroPredictionClass);
     RUN_TEST(testEvaluationEpochWithReport_ReturnsConfusionMatrix);
@@ -1442,5 +1780,9 @@ int main(void) {
     RUN_TEST(testEvaluationEpoch_FlatAggregator_DivisionByTotalSamples);
     RUN_TEST(testEvaluationEpoch_SumPath_ReturnsRawTotal);
     RUN_TEST(testTrainingRun_HardcodesForwardReductionMean);
+    RUN_TEST(testTrainingRunStepsSchedulerOncePerEpoch);
+    RUN_TEST(testTrainingRunNullSchedulerKeepsLrConstant);
+    RUN_TEST(testTrainingRunRejectsSchedulerWiredToDifferentOptimizer);
+    RUN_TEST(testTrainingRunCallbackObservesTheEpochsOwnLr);
     return UNITY_END();
 }

@@ -3,10 +3,10 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#include "ArithmeticType.h"
 #include "Common.h"
 #include "Conv1d.h"
 #include "Conv1dApi.h"
-#include "Distributions.h"
 #include "Kernel.h"
 #include "Layer.h"
 #include "LayerCommon.h"
@@ -15,44 +15,6 @@
 #include "StorageApi.h"
 #include "Tensor.h"
 #include "TensorApi.h"
-
-/* ============================================================================
- * Legacy factory (renamed in Task 4).
- * ========================================================================== */
-
-layer_t *conv1dLayerInitLegacy(parameter_t *weights, parameter_t *bias, kernel_t *kernel,
-                               quantization_t *forwardQ, quantization_t *weightGradQ,
-                               quantization_t *biasGradQ, quantization_t *propLossQ) {
-    layer_t *conv1dLayer = reserveMemory(sizeof(layer_t));
-    layerConfig_t *layerConfig = reserveMemory(sizeof(layerConfig_t));
-    conv1dConfig_t *conv1dConfig = reserveMemory(sizeof(conv1dConfig_t));
-
-    initConv1dConfigWithWeightsAndBias(conv1dConfig, kernel, weights, bias, 1u, forwardQ,
-                                       weightGradQ, biasGradQ, propLossQ);
-    conv1dConfig->ownsQuantizations = false;
-
-    conv1dLayer->type = CONV1D;
-    layerConfig->conv1d = conv1dConfig;
-    conv1dLayer->config = layerConfig;
-
-    return conv1dLayer;
-}
-
-void freeConv1dLayerLegacy(layer_t *conv1dLayer) {
-    conv1dConfig_t *conv1dConfig = conv1dLayer->config->conv1d;
-
-    freeParameter(conv1dConfig->weights);
-    if (conv1dConfig->bias) {
-        freeParameter(conv1dConfig->bias);
-    }
-
-    freeQuantization(conv1dConfig->forwardQ);
-    freeQuantization(conv1dConfig->weightGradQ);
-    freeQuantization(conv1dConfig->biasGradQ);
-    freeQuantization(conv1dConfig->propLossQ);
-    freeReservedMemory(conv1dConfig);
-    freeReservedMemory(conv1dLayer);
-}
 
 /* ============================================================================
  * New factory API — conv1dInit_t struct + layerQuant_t profile (PR 2).
@@ -87,8 +49,8 @@ static shape_t *buildOwnedShape(const size_t *srcDims, size_t numberOfDims) {
 }
 
 static parameter_t *allocateConv1dWeights(size_t outChannels, size_t inChannels, size_t groups,
-                                          size_t kernelSize, quantization_t *storageQ,
-                                          quantization_t *gradQ) {
+                                          size_t kernelSize, weightInit_t weightInit,
+                                          quantization_t *storageQ, quantization_t *gradQ) {
     /* Conv1d weight shape: [outChannels, inChannels/groups, kernelSize].
      * Per Conv1d.h:11. */
     if (inChannels % groups != 0) {
@@ -106,31 +68,23 @@ static parameter_t *allocateConv1dWeights(size_t outChannels, size_t inChannels,
     shape_t *shape = buildOwnedShape((size_t[]){outChannels, inPerGroup, kernelSize}, 3);
     tensor_t *paramTensor = initTensor(shape, getQLike(storageQ), NULL);
 
-    /* PyTorch-aligned default: Kaiming uniform with fan_in mode.
-     * Note: PyTorch's actual default uses a=sqrt(5); bit-identical parity
-     * requires Issue C (distribution parametrization). */
-    if (storageQ->type != FLOAT32) {
-        PRINT_ERROR("conv1dLayerInit: KAIMING_UNIFORM init currently requires FLOAT32 "
-                    "weight storage (Issue C will lift this limit)");
-        exit(1);
-    }
-    distribution_t dist = {
-        .type = KAIMING_UNIFORM,
-        .params.kaiming = {.gain = 1.4142135623730951f /* sqrtf(2.0f) */,
-                           .fanMode = inPerGroup * kernelSize},
-    };
-    initDistribution(paramTensor, &dist);
+    /* fan_in = inPerGroup*kernelSize; fan_out = outPerGroup*kernelSize
+     * (PyTorch _calculate_fan_in_and_fan_out for the Conv1d weight layout). */
+    size_t fanIn = inPerGroup * kernelSize;
+    size_t fanOut = (outChannels / groups) * kernelSize;
+    initWeightTensor(paramTensor, weightInit, fanIn, fanOut);
 
     tensor_t *gradTensor = gradInit(paramTensor, gradQ, NULL);
     return parameterInit(paramTensor, gradTensor);
 }
 
-static parameter_t *allocateConv1dBias(size_t outChannels, quantization_t *storageQ,
+static parameter_t *allocateConv1dBias(size_t outChannels, size_t fanIn, quantization_t *storageQ,
                                        quantization_t *gradQ) {
-    /* Bias tensor: shape [outChannels]. Zero-initialized via calloc (reserveMemory). */
+    /* Bias tensor: shape [outChannels]. PyTorch draws bias from
+     * uniform(+/- 1/sqrt(fan_in)) using the WEIGHT's fan_in. */
     shape_t *shape = buildOwnedShape((size_t[]){outChannels}, 1);
     tensor_t *paramTensor = initTensor(shape, getQLike(storageQ), NULL);
-    /* No initDistribution(ZEROS) — calloc already gave us zeros. */
+    initBiasTensor(paramTensor, fanIn);
 
     tensor_t *gradTensor = gradInit(paramTensor, gradQ, NULL);
     return parameterInit(paramTensor, gradTensor);
@@ -160,12 +114,12 @@ static void validateLayerQuantForConv1d(layerQuant_t *lq, bool hasBias) {
         PRINT_ERROR("conv1dLayerInit: lq pointer is NULL");
         exit(1);
     }
-    if (lq->forwardMath == NULL) {
-        PRINT_ERROR("conv1dLayerInit: layerQuant.forwardMath must be set");
+    if (lq->outputQ == NULL) {
+        PRINT_ERROR("conv1dLayerInit: layerQuant.outputQ must be set");
         exit(1);
     }
-    if (lq->backwardMath == NULL) {
-        PRINT_ERROR("conv1dLayerInit: layerQuant.backwardMath must be set");
+    if (lq->propLossQ == NULL) {
+        PRINT_ERROR("conv1dLayerInit: layerQuant.propLossQ must be set");
         exit(1);
     }
     if (lq->weightStorage == NULL) {
@@ -211,16 +165,32 @@ layer_t *conv1dLayerInit(conv1dInit_t *init, layerQuant_t *lq) {
     layer->config = layerCfg;
 
     cfg->kernel = buildConv1dKernel(init);
-    quantization_t *gradQ = quantizationInitFloat(); /* Conv1d backward is FLOAT32-only */
-    cfg->weights = allocateConv1dWeights(init->outChannels, init->inChannels, groups,
-                                         init->kernelSize, lq->weightStorage, gradQ);
-    cfg->bias = hasBias ? allocateConv1dBias(init->outChannels, lq->biasStorage, gradQ) : NULL;
-    freeQuantization(gradQ);
+    size_t fanIn = (init->inChannels / groups) * init->kernelSize;
+    /* Grad storage knob (#261): Conv1d backward is FLOAT32-only, so a NULL knob
+     * keeps the hard-pinned FLOAT32 default; a non-NULL weightGradStorage /
+     * biasGradStorage overrides it explicitly. */
+    quantization_t *floatGradQ = quantizationInitFloat();
+    quantization_t *weightGradQ =
+        lq->weightGradStorage != NULL ? lq->weightGradStorage : floatGradQ;
+    quantization_t *biasGradQ = lq->biasGradStorage != NULL ? lq->biasGradStorage : floatGradQ;
+    cfg->weights =
+        allocateConv1dWeights(init->outChannels, init->inChannels, groups, init->kernelSize,
+                              init->weightInit, lq->weightStorage, weightGradQ);
+    cfg->bias =
+        hasBias ? allocateConv1dBias(init->outChannels, fanIn, lq->biasStorage, biasGradQ) : NULL;
+    freeQuantization(floatGradQ);
     cfg->groups = groups;
-    cfg->forwardQ = lq->forwardMath;
-    cfg->weightGradQ = lq->backwardMath;
-    cfg->biasGradQ = lq->backwardMath;
-    cfg->propLossQ = lq->backwardMath;
+
+    /* Borrowing: store the forward-wire/dx-wire storage configs verbatim, no copy.
+     * Arithmetic slots are plain by-value copies of the profile's declared math. */
+    cfg->forwardMath = lq->forwardMath;
+    cfg->weightGradMath = lq->weightGradMath;
+    cfg->biasGradMath = lq->biasGradMath;
+    cfg->propLossMath = lq->propLossMath;
+    cfg->outputQ = lq->outputQ;
+    cfg->propLossQ = lq->propLossQ;
+    cfg->weightGradAccMode = lq->weightGradAccMode;
+    cfg->biasGradAccMode = lq->biasGradAccMode;
     cfg->ownsQuantizations = false;
 
     return layer;
@@ -245,19 +215,32 @@ layer_t *conv1dLayerInitOwning(conv1dInit_t *init, layerQuant_t *lq) {
     /* allocateConv1dWeights / allocateConv1dBias internally clone via getQLike,
      * so the parameter tensors own their quantization_t — caller can drop
      * lq->weightStorage / lq->biasStorage immediately. */
-    quantization_t *gradQ = quantizationInitFloat(); /* Conv1d backward is FLOAT32-only */
-    cfg->weights = allocateConv1dWeights(init->outChannels, init->inChannels, groups,
-                                         init->kernelSize, lq->weightStorage, gradQ);
-    cfg->bias = hasBias ? allocateConv1dBias(init->outChannels, lq->biasStorage, gradQ) : NULL;
-    freeQuantization(gradQ);
+    size_t fanIn = (init->inChannels / groups) * init->kernelSize;
+    /* Grad storage knob (#261): Conv1d backward is FLOAT32-only, so a NULL knob
+     * keeps the hard-pinned FLOAT32 default; a non-NULL weightGradStorage /
+     * biasGradStorage overrides it explicitly. */
+    quantization_t *floatGradQ = quantizationInitFloat();
+    quantization_t *weightGradQ =
+        lq->weightGradStorage != NULL ? lq->weightGradStorage : floatGradQ;
+    quantization_t *biasGradQ = lq->biasGradStorage != NULL ? lq->biasGradStorage : floatGradQ;
+    cfg->weights =
+        allocateConv1dWeights(init->outChannels, init->inChannels, groups, init->kernelSize,
+                              init->weightInit, lq->weightStorage, weightGradQ);
+    cfg->bias =
+        hasBias ? allocateConv1dBias(init->outChannels, fanIn, lq->biasStorage, biasGradQ) : NULL;
+    freeQuantization(floatGradQ);
     cfg->groups = groups;
 
-    /* Owning: deep-copy each of the four math quantizations. Always four
-     * separate copies (no aliasing), keeping freeConv1dLayer simple. */
-    cfg->forwardQ = deepCopyQuantization(lq->forwardMath);
-    cfg->weightGradQ = deepCopyQuantization(lq->backwardMath);
-    cfg->biasGradQ = deepCopyQuantization(lq->backwardMath);
-    cfg->propLossQ = deepCopyQuantization(lq->backwardMath);
+    /* Owning: same arithmetic as Borrowing; deep-copy the two storage configs
+     * (outputQ, propLossQ) into fresh allocations — 2 allocs, not 4. */
+    cfg->forwardMath = lq->forwardMath;
+    cfg->weightGradMath = lq->weightGradMath;
+    cfg->biasGradMath = lq->biasGradMath;
+    cfg->propLossMath = lq->propLossMath;
+    cfg->outputQ = deepCopyQuantization(lq->outputQ);
+    cfg->propLossQ = deepCopyQuantization(lq->propLossQ);
+    cfg->weightGradAccMode = lq->weightGradAccMode;
+    cfg->biasGradAccMode = lq->biasGradAccMode;
     cfg->ownsQuantizations = true;
 
     return layer;
@@ -278,26 +261,13 @@ void freeConv1dLayer(layer_t *conv1dLayer) {
     }
     freeReservedMemory(cfg->kernel);
 
-    /* Conditionally factory-owned: quantizations (Owning variant only).
-     * Defensive dedup: the Owning factory in Task 9 allocates four
-     * separate copies (no aliasing), so the dedup is a no-op there but
-     * protects against future aliasing. */
+    /* Conditionally factory-owned: the two storage configs (Owning variant only). */
     if (cfg->ownsQuantizations) {
-        if (cfg->forwardQ != NULL) {
-            freeReservedMemory(cfg->forwardQ->qConfig);
-            freeReservedMemory(cfg->forwardQ);
+        if (cfg->outputQ != NULL) {
+            freeReservedMemory(cfg->outputQ->qConfig);
+            freeReservedMemory(cfg->outputQ);
         }
-        if (cfg->weightGradQ != NULL && cfg->weightGradQ != cfg->forwardQ) {
-            freeReservedMemory(cfg->weightGradQ->qConfig);
-            freeReservedMemory(cfg->weightGradQ);
-        }
-        if (cfg->biasGradQ != NULL && cfg->biasGradQ != cfg->forwardQ &&
-            cfg->biasGradQ != cfg->weightGradQ) {
-            freeReservedMemory(cfg->biasGradQ->qConfig);
-            freeReservedMemory(cfg->biasGradQ);
-        }
-        if (cfg->propLossQ != NULL && cfg->propLossQ != cfg->forwardQ &&
-            cfg->propLossQ != cfg->weightGradQ && cfg->propLossQ != cfg->biasGradQ) {
+        if (cfg->propLossQ != NULL && cfg->propLossQ != cfg->outputQ) {
             freeReservedMemory(cfg->propLossQ->qConfig);
             freeReservedMemory(cfg->propLossQ);
         }

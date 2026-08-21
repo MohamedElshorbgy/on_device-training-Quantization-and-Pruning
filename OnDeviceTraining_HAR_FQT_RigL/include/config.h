@@ -43,7 +43,7 @@
 #define FQT_QMIN   -128
 
 /* ── RigL hyper-parameters ───────────────────────────────────────── */
-#define RIGL_SPARSITY  0.75f   /* target fraction of zeros           */
+#define RIGL_SPARSITY  0.80f   /* target fraction of zeros           */
 #define RIGL_DELTA_T   100     /* prune-regrow every N batches       */
 #define RIGL_FRAC      0.20f   /* fraction of active weights cycled  */
 

@@ -10,7 +10,6 @@
 #define MATMUL_FUNC_SYM_INT32 matmulSymIntTensors
 #endif
 
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -19,6 +18,7 @@
 #include "DTypes.h"
 #include "Matmul.h"
 #include "Mul.h"
+#include "Rounding.h"
 #include "Tensor.h"
 
 size_t matmulInstructionCounter = 0;
@@ -231,15 +231,40 @@ void matmulSymIntTensorsWithInstructionCounter(tensor_t *aTensor, tensor_t *bTen
     ++matmulInstructionCounter;
 }
 
+static void matmulValidateSymOperand(tensor_t *t, const char *what) {
+    if (t->quantization->type != SYM_INT32) {
+        PRINT_ERROR("matmul SYM_INT32: %s must be SYM_INT32", what);
+        exit(1);
+    }
+    symInt32QConfig_t *qc = t->quantization->qConfig;
+    if (qc->qMaxBits > ODT_SYM_OPERAND_QMAXBITS) {
+        PRINT_ERROR("matmul SYM_INT32: %s qMaxBits (%u) exceeds operand contract (%u) — int32 "
+                    "product accumulation would overflow (#227)",
+                    what, (unsigned)qc->qMaxBits, (unsigned)ODT_SYM_OPERAND_QMAXBITS);
+        exit(1);
+    }
+}
+
 void matmulSymInt32Tensors(tensor_t *aTensor, tensor_t *bTensor, tensor_t *outputTensor) {
+    matmulValidateSymOperand(aTensor, "aTensor");
+    matmulValidateSymOperand(bTensor, "bTensor");
     MATMUL_FUNC_SYM_INT32(aTensor, bTensor, outputTensor);
 }
 
 void matmulSymInt32TensorsWithBias(tensor_t *aTensor, tensor_t *bTensor, tensor_t *outputTensor,
                                    tensor_t *bias) {
+    matmulValidateSymOperand(aTensor, "aTensor");
+    matmulValidateSymOperand(bTensor, "bTensor");
     if (bias == NULL) {
         matmulIntCore(aTensor, bTensor, outputTensor, NULL);
     } else {
+        /* Bias is a value-sum seed (not a product operand), so it is exempt from
+         * the int12 operand bound but must still be SYM_INT32: the branch below
+         * reads its data as int32 and its qConfig as symInt32QConfig_t (#247). */
+        if (bias->quantization->type != SYM_INT32) {
+            PRINT_ERROR("matmul SYM_INT32: bias must be SYM_INT32");
+            exit(1);
+        }
         size_t bColumns =
             (bTensor->shape->numberOfDimensions < 2) ? 1 : getDimensionsByIndex(bTensor, 1);
         if (calcNumberOfElementsByTensor(bias) != bColumns) {
@@ -247,17 +272,19 @@ void matmulSymInt32TensorsWithBias(tensor_t *aTensor, tensor_t *bTensor, tensor_
             exit(1);
         }
 
+        symInt32QConfig_t *biasQC = (symInt32QConfig_t *)bias->quantization->qConfig;
         float aScale = ((symInt32QConfig_t *)aTensor->quantization->qConfig)->scale;
         float bScale = ((symInt32QConfig_t *)bTensor->quantization->qConfig)->scale;
-        float biasScale = ((symInt32QConfig_t *)bias->quantization->qConfig)->scale;
+        float biasScale = biasQC->scale;
         float outputScale = aScale * bScale;
 
-        /* Rescale the bias into the accumulator's scale: one fixed-point op per
-         * output column (small: == outFeatures), outside the MAC loop. */
+        /* Rescale the bias into the accumulator's scale via the shared #189 helper
+         * (guarded float->int32 cast): one fixed-point op per output column. */
         int32_t seed[bColumns];
         for (size_t c = 0; c < bColumns; c++) {
             int32_t biasIntC = readBytesAsInt32(&bias->data[c * sizeof(int32_t)]);
-            seed[c] = (int32_t)roundf((float)biasIntC * biasScale / outputScale);
+            seed[c] =
+                rescaleIntoAccumulatorScale(biasIntC, biasScale, outputScale, biasQC->roundingMode);
         }
         matmulIntCore(aTensor, bTensor, outputTensor, seed);
     }

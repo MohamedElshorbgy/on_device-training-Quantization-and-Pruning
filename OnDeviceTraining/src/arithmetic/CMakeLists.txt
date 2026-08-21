@@ -22,6 +22,22 @@ target_link_libraries(Arithmetic PRIVATE
         Common
 )
 
+add_library(ArithmeticType ArithmeticType.c)
+target_include_directories(ArithmeticType PUBLIC include)
+target_link_libraries(ArithmeticType PRIVATE
+        Quantization
+        Rounding
+)
+
+add_library(Axpby Axpby.c)
+target_include_directories(Axpby PUBLIC include)
+target_link_libraries(Axpby PRIVATE
+        Tensor
+        DTypes
+        Arithmetic
+        Common
+)
+
 add_library(Comparison Comparison.c)
 target_include_directories(Comparison PUBLIC include)
 target_link_libraries(Comparison PRIVATE
@@ -32,10 +48,13 @@ target_link_libraries(Comparison PRIVATE
 
 add_library(Distributions Distributions.c)
 target_include_directories(Distributions PUBLIC include)
-target_link_libraries(Distributions PRIVATE
+target_link_libraries(Distributions PUBLIC RNG PRIVATE
         Common
-        RNG
         m
+        Tensor
+        DTypes
+        Quantization
+        Rounding
 )
 
 add_library(Div Div.c)
@@ -45,6 +64,18 @@ target_link_libraries(Div PRIVATE
         DTypes
         Arithmetic
         Common
+)
+
+add_library(JacobiEig JacobiEig.c)
+target_include_directories(JacobiEig PUBLIC include)
+target_link_libraries(JacobiEig PRIVATE
+        m
+        Common
+        Tensor
+        DTypes
+        Quantization
+        Reduce
+        MinMax
 )
 
 add_library(Kernel Kernel.c)
@@ -73,7 +104,7 @@ target_link_libraries(Matmul PRIVATE
         Tensor
         DTypes
         Mul
-        Common
+        Rounding
 )
 
 add_library(Mul Mul.c)
@@ -91,6 +122,19 @@ target_link_libraries(MinMax PRIVATE
         Tensor
         DTypes
         Common
+)
+
+add_library(Reduce Reduce.c)
+target_include_directories(Reduce PUBLIC include)
+target_link_libraries(Reduce PRIVATE m Common Div Sub Add Mul Square Arithmetic Tensor DTypes Quantization Rounding MinMax)
+
+add_library(RowBroadcast RowBroadcast.c)
+target_include_directories(RowBroadcast PUBLIC include)
+target_link_libraries(RowBroadcast PRIVATE
+        Common
+        Tensor
+        DTypes
+        Quantization
 )
 
 add_library(Rounding Rounding.c)
@@ -147,6 +191,8 @@ target_link_libraries(Conv1dKernel PRIVATE
         Tensor
         Kernel
         SlidingWindow1d
+        Mul
+        Rounding
         Common
 )
 
@@ -156,5 +202,38 @@ target_link_libraries(ConvTranspose1dKernel PRIVATE
         Tensor
         Kernel
         SlidingWindow1d
+        Mul
+        Rounding
         Common
 )
+
+add_library(ExecuteOp ExecuteOp.c)
+target_include_directories(ExecuteOp PUBLIC include)
+target_link_libraries(ExecuteOp PRIVATE
+        Tensor
+        Quantization
+        ArithmeticType
+        TensorConversion
+        Add
+        Rounding
+        Common
+)
+
+add_library(PointwiseFused PointwiseFused.c)
+target_include_directories(PointwiseFused PUBLIC include)
+target_link_libraries(PointwiseFused PRIVATE
+        Tensor
+        Common
+        m
+)
+# Rounding order is the torch-parity contract. The in-source pragma is NOT
+# enough: GCC ignores `#pragma STDC FP_CONTRACT` and its default
+# (-ffp-contract=fast) fuses a+t*c into vfma on ARM (verified on
+# arm-none-eabi-gcc 10.3 / Cortex-M4F) — invisible on x86-64 CI, which
+# cannot contract without -mfma. The flag binds on both GCC and Clang.
+target_compile_options(PointwiseFused PRIVATE -ffp-contract=off)
+# Latent instruction counters (ODT_MEM_PROFILE pattern, src/userApi/CMakeLists.txt:43):
+# the define must sit on the LIBRARY (a test-target define is inert); PUBLIC so
+# guarded test TUs inherit it through the link edge.
+target_compile_definitions(PointwiseFused PUBLIC
+        $<$<BOOL:${ODT_TRACK_INSTRUCTIONS}>:TRACK_INSTRUCTIONS>)

@@ -27,20 +27,27 @@ typedef struct conv1dTransposedInit {
     size_t outChannels;
     size_t kernelSize;
     /* OPTIONAL */
-    size_t stride;         /* 0 → 1 */
-    paddingType_t padding; /* 0 → VALID. SAME is rejected by the internal layer in Phase 1. */
-    size_t dilation;       /* 0 → 1 */
-    size_t groups;         /* 0 → 1 */
-    size_t outputPadding;  /* PyTorch parity; default 0; must be < max(stride, dilation) */
-    bias_t bias;           /* BIAS_DEFAULT (0) → resolves to true */
+    size_t stride;           /* 0 → 1 */
+    paddingType_t padding;   /* 0 → VALID. SAME is rejected by the internal layer in Phase 1. */
+    size_t dilation;         /* 0 → 1 */
+    size_t groups;           /* 0 → 1 */
+    size_t outputPadding;    /* PyTorch parity; default 0; must be < max(stride, dilation) */
+    bias_t bias;             /* BIAS_DEFAULT (0) → resolves to true */
+    weightInit_t weightInit; /* zero-init → INIT_DEFAULT (PyTorch kaiming a=√5) */
 } conv1dTransposedInit_t;
 
 /*! Borrowing variant — allocates kernel, weights, bias; stores the four
- *  lq math quantizations verbatim. Caller retains ownership of lq. */
+ *  lq math quantizations verbatim. Caller retains ownership of lq.
+ *  Use when: the quantizations are shared/long-lived (e.g. reused across
+ *  several layers) and the caller manages their lifetime — they must
+ *  outlive the layer. */
 layer_t *conv1dTransposedLayerInit(conv1dTransposedInit_t *init, layerQuant_t *lq);
 
 /*! Owning variant — additionally deep-copies the four math quantizations
- *  via deepCopyQuantization. */
+ *  via deepCopyQuantization.
+ *  Use when: the quantizations are stack-locals or one-off configs and you
+ *  want fire-and-forget teardown (freeConv1dTransposedLayer tears them down
+ *  too). */
 layer_t *conv1dTransposedLayerInitOwning(conv1dTransposedInit_t *init, layerQuant_t *lq);
 
 /*! Tears down everything the factory allocated. Reads

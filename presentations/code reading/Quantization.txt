@@ -1,0 +1,120 @@
+#ifndef ENV5_RUNTIME_QUANTIZATION_H
+#define ENV5_RUNTIME_QUANTIZATION_H
+
+#include "Rounding.h"
+
+typedef enum qtype { INT32, FLOAT32, SYM_INT32, SYM, ASYM, BOOL } qtype_t;
+\\This enum will have one named value for each of the five supported quantization formats.
+typedef struct symInt32QConfig {
+    float scale;
+    roundingMode_t roundingMode;
+    uint8_t qMaxBits;                             \\Number of significant bits in the quantized representation
+} symInt32QConfig_t;
+\\The real value equals the stored integer multiplied by a scale
+factor: real_value = stored_int32 × scale. The range is symmetric around zero (-max to +max). This is the primary format used during Fully
+Quantized Training forward and backward passes.
+Every SYM_INT32 tensor carries one of these to describe how its stored integers relate to real values.
+typedef struct symQConfig {
+    float scale;
+    uint8_t qBits;
+    roundingMode_t roundingMode;
+} symQConfig_t;
+\\Same as SYM_INT32
+but stores values in 8 bits instead of 32 bits. This uses less memory but has lower precision. SYM_INT32 is preferred in this project.
+typedef struct asymQConfig {
+    float scale;
+    int16_t zeroPoint;
+    uint8_t qBits;
+    roundingMode_t roundingMode;
+} asymQConfig_t;
+The real value equals (stored_int8 + zero_point) × scale. This allows the quantized range to be shifted away from zero, which is useful for
+activations (outputs of activation functions like Rectified Linear Unit) that are always non-negative. Used during asymmetric inference.
+typedef struct quantization {
+    qtype_t type;
+    void *qConfig;
+} quantization_t;
+
+// Important: This sets qMaxBits to 16
+void initSymInt32QConfig(roundingMode_t roundingMode, symInt32QConfig_t *symInt32QConfig);
+void initSymInt32QConfigWithQMaxBits(roundingMode_t roundingMode,
+                                     symInt32QConfig_t *symInt32QConfig, uint8_t qMaxBits);
+void initSymQConfig(uint8_t qBits, roundingMode_t roundingMode, symQConfig_t *symQConfig);
+void initAsymQConfig(uint8_t qBits, roundingMode_t roundingMode, asymQConfig_t *asymQConfig);
+
+void initInt32Quantization(quantization_t *quantization);
+void initFloat32Quantization(quantization_t *quantization);
+void initBoolQuantization(quantization_t *quantization);
+
+void initSymInt32Quantization(symInt32QConfig_t *symInt32QConfig, quantization_t *quantization);
+void initSymQuantization(symQConfig_t *symQConfig, quantization_t *quantization);
+void initAsymQuantization(asymQConfig_t *asymQConfig, quantization_t *quantization);
+
+#endif // ENV5_RUNTIME_QUANTIZATION_H
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------
+
+#define SOURCE_FILE "QUANTIZATION"
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "Quantization.h"
+#include "Rounding.h"
+
+void initSymInt32QConfig(roundingMode_t roundingMode, symInt32QConfig_t *symInt32QConfig) {
+    symInt32QConfig->roundingMode = roundingMode;
+    symInt32QConfig->scale = 1.f;
+    symInt32QConfig->qMaxBits = 16;
+}
+
+void initSymInt32QConfigWithQMaxBits(roundingMode_t roundingMode,
+                                     symInt32QConfig_t *symInt32QConfig, uint8_t qMaxBits) {
+    symInt32QConfig->roundingMode = roundingMode;
+    symInt32QConfig->scale = 1.f;
+    symInt32QConfig->qMaxBits = qMaxBits;
+}
+
+void initSymQConfig(uint8_t qBits, roundingMode_t roundingMode, symQConfig_t *symQConfig) {
+    symQConfig->qBits = qBits;
+    symQConfig->roundingMode = roundingMode;
+    symQConfig->scale = 1.f;
+}
+
+void initAsymQConfig(uint8_t qBits, roundingMode_t roundingMode, asymQConfig_t *asymQConfig) {
+    asymQConfig->qBits = qBits;
+    asymQConfig->roundingMode = roundingMode;
+    asymQConfig->scale = 1.f;
+    asymQConfig->zeroPoint = (uint16_t)0;
+}
+
+void initInt32Quantization(quantization_t *quantization) {
+    quantization->type = INT32;
+    quantization->qConfig = NULL;
+}
+
+void initFloat32Quantization(quantization_t *quantization) {
+    quantization->type = FLOAT32;
+    quantization->qConfig = NULL;
+}
+
+void initBoolQuantization(quantization_t *quantization) {
+    quantization->type = BOOL;
+    quantization->qConfig = NULL;
+}
+
+void initSymInt32Quantization(symInt32QConfig_t *symInt32QConfig, quantization_t *quantization) {
+    quantization->type = SYM_INT32;
+    quantization->qConfig = symInt32QConfig;
+}
+
+void initSymQuantization(symQConfig_t *symQConfig, quantization_t *quantization) {
+    quantization->type = SYM;
+    quantization->qConfig = symQConfig;
+}
+
+void initAsymQuantization(asymQConfig_t *asymQConfig, quantization_t *quantization) {
+    quantization->type = ASYM;
+    quantization->qConfig = asymQConfig;
+}
+

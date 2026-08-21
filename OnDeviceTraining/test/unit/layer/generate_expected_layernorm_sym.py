@@ -6,14 +6,29 @@ inputs -> per-group stats from mantissas -> global absmax stretch -> separate
 affine with beta rescale) and emits the expected output mantissas + scale,
 plus the true PyTorch xhat for dequant-domain parity, per fixture.
 
+PR1b.2 (Task 3): the affine stage's raw producer output (Finding A — same
+accumulator-range class as Linear/Conv1d's matmul, NOT self-restoring as an
+earlier recon pass mistakenly assumed) now routes through executeOp's
+OUT_WRITE epilogue; for a SYM_INT32 target this hits the conversionMatrix
+diagonal (requantSymInt32Tensor) instead of a raw direct write. The emitted
+mantissas/scale below are therefore the RESTORED (post-requant) values, not
+the raw affine output — see `_requant_i12_f32` and its call in `_run_fixture`.
+
 Self-checks:
  - emitted float fixtures are dequantization-STABLE: re-quantizing them
    reproduces the mantissas bit-exactly (so the C side's
    tensorFillFromFloatBuffer lands on the same input mantissas);
- - the emulated dequantized output matches F.layer_norm on the dequantized
-   inputs within the analytic quantization bound;
+ - the emulated dequantized output (both raw AND restored) matches
+   F.layer_norm on the dequantized inputs within the analytic quantization
+   bound;
+ - the restored mantissa/scale tolerances are DERIVED (not just asserted) by
+   perturbing the raw emulation by its own worst-case C-vs-emulation noise
+   band and re-running the SAME requant, taking the observed worst case plus
+   a safety margin (see `_restore_tolerances`);
  - parity fixtures keep absmax(xhat) <= 1.9, which guarantees the documented
-   3e-5 C-side xhat tolerance (s_norm/2 <= 1.9/65534 ~ 2.9e-5).
+   5e-4 C-side xhat tolerance: at int12 operands (qMaxBits=12, #227) the
+   normalized output LSB is s_norm <= 1.9/2047, so s_norm/2 <= 4.64e-4 < 5e-4
+   (the int16 era used 1.9/65534 ~ 2.9e-5 -> a 3e-5 tolerance).
 
 Biased variance (/N) via explicit emulation + F.layer_norm; NEVER torch.var
 (ddof=1 default). Rounding: the framework's roundByMode(HALF_AWAY) is C
@@ -23,14 +38,21 @@ half-to-even, which diverges on ties like 16382.5).
 Run via `uv run` (CMake wires this automatically).
 """
 import argparse
+import math
 import sys
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 
-QMAX = 32767.0
-QMIN = -32768.0
+# SYM_INT32 forward is operand-domain end-to-end (#227 int12 operand flip).
+# input/gamma/beta and the normalized OUTPUT all live in default-initialized
+# (quantizationInitSymInt32) tensors, which are now int12 (qMaxBits=12):
+#   absmax -> scale = absmax/2047, round-clamp to [-2048, 2047].
+# There is NO grad accumulator in the forward, so every QMAX/QMIN here is int12.
+# (The backward generator carries the operand-int12 vs grad-int16 split.)
+QMAX = 2047.0
+QMIN = -2048.0
 
 
 def round_half_away(x: torch.Tensor) -> torch.Tensor:
@@ -121,6 +143,53 @@ def emulate_sym_forward(xq, sx, gq, sg, bq, sb, normalized_shape, eps):
     return yq.to(torch.int32).reshape(xq.shape), s_y, s_norm, var_ratio
 
 
+def _requant_i12_f32(mantissas: torch.Tensor, scale: float):
+    """PR1b.2 (Task 3): mirrors requantSymInt32Tensor's exact float32 sequence
+    (TensorConversion.c) applied to the funnel's raw affine-stage output:
+    dequant (f32) -> absmax (f32) -> scale=absmax/qMax (f32) ->
+    round_half_away(clamp(...)). Returns (restored int32 mantissas, restored
+    scale)."""
+    deq = mantissas.to(torch.float32) * torch.tensor(scale, dtype=torch.float32)
+    absmax = deq.abs().max().to(torch.float32)
+    if absmax.item() == 0.0:
+        return torch.zeros_like(mantissas, dtype=torch.int32), 1.0
+    new_scale = (absmax / QMAX).item()
+    q = round_half_away(
+        torch.clamp(deq / torch.tensor(new_scale, dtype=torch.float32), QMIN, QMAX))
+    return q.to(torch.int32), new_scale
+
+
+def _restore_tolerances(yq, s_y, mantissa_tol, yq_r, s_y_r):
+    """Empirically DERIVE (not just assert) the restored (mantissa, scale)
+    tolerances: no independent C run is available at generation time, so
+    perturb the raw emulation by its own worst-case C-vs-emulation noise band
+    (+-mantissa_tol, applied elementwise AND concentrated at the argmax
+    element, which drives the requant's absmax renormalization) and measure
+    how far the restored mantissas/scale actually move under the SAME requant
+    transform. This calibrates the propagated tolerance directly against the
+    real transform instead of trusting an analytic (and easy-to-get-wrong)
+    closed-form propagation, then applies a fixed safety margin on the
+    observed worst case."""
+    idx = int(yq.abs().reshape(-1).argmax().item())
+    variants = [yq + mantissa_tol, yq - mantissa_tol]
+    for delta in (mantissa_tol, -mantissa_tol):
+        v = yq.clone()
+        v.reshape(-1)[idx] += delta
+        variants.append(v)
+    max_mdiff = 0
+    max_sdiff = 0.0
+    for variant in variants:
+        vq, vs = _requant_i12_f32(variant, s_y)
+        mdiff = int((vq.to(torch.int64) - yq_r.to(torch.int64)).abs().max().item())
+        sdiff = abs(vs - s_y_r) / s_y_r
+        max_mdiff = max(max_mdiff, mdiff)
+        max_sdiff = max(max_sdiff, sdiff)
+    margin = 1.5
+    mantissa_tol_r = int(math.ceil(max_mdiff * margin)) + 1
+    scale_rel_tol_r = max_sdiff * margin
+    return mantissa_tol_r, scale_rel_tol_r
+
+
 def _run_fixture(name, x, gamma, beta, normalized_shape, *, eps=1e-5,
                  require_parity=False):
     xq, sx, x_deq = stable_dequant(x)
@@ -153,11 +222,29 @@ def _run_fixture(name, x, gamma, beta, normalized_shape, *, eps=1e-5,
     mantissa_tol = 2 * int(gq.abs().max().item()) + 1
     dequant_tol = bound + mantissa_tol * s_y
 
+    # PR1b.2 (Task 3): the affine's raw output no longer lands in `output`
+    # directly — executeOp's OUT_WRITE epilogue restores width via the
+    # SYM->SYM conversionMatrix diagonal (requantSymInt32Tensor). Restore the
+    # SAME way here so the emitted fixture matches what the funnel produces.
+    yq_r, s_y_r = _requant_i12_f32(yq, s_y)
+
+    # Restored dequant tracks the SAME F.layer_norm reference: restoration is
+    # a pure width-renormalization of the identical underlying value, adding
+    # at most one more rounding pass (+-0.5 LSB of the NEW scale; 4x margin
+    # for the requant's own absmax-recompute float32 noise).
+    restored_bound = dequant_tol + 4.0 * s_y_r + 1e-9
+    restored_err = (yq_r.to(torch.float64) * s_y_r - ref).abs().max().item()
+    assert restored_err <= restored_bound, \
+        f"{name}: restored dequant vs F.layer_norm {restored_err} > {restored_bound}"
+
+    mantissa_tol_r, scale_rel_tol_r = _restore_tolerances(yq, s_y, mantissa_tol, yq_r, s_y_r)
+
     return {
         "name": name,
         "x": x_deq, "gamma": g_deq, "beta": b_deq,
-        "mantissas": yq, "scale": s_y,
-        "mantissa_tol": mantissa_tol, "dequant_tol": dequant_tol,
+        "mantissas": yq_r, "scale": s_y_r,
+        "mantissa_tol": mantissa_tol_r, "dequant_tol": restored_bound,
+        "scale_tol": scale_rel_tol_r,
         "dequant": ref.to(torch.float32),
         "xhat": xhat.to(torch.float32) if require_parity else None,
         "var_ratio": var_ratio.to(torch.float32),
@@ -177,7 +264,8 @@ def fixture_sym_parity():
 
 def fixture_sym_affine():
     # [2,4], non-trivial gamma/beta with deliberately different scales:
-    # s_gamma = 2/32767, s_beta = 0.05/32767 — the beta rescale MUST matter.
+    # s_gamma = 2/2047, s_beta = 0.05/2047 (int12 operands, #227) — the beta
+    # rescale MUST matter (s_beta != s_y).
     x = torch.tensor([[0.2, -1.0, 0.6, 1.4],
                       [1.0, 3.0, -2.0, 0.0]], dtype=torch.float64)
     gamma = torch.tensor([1.5, -0.5, 2.0, 0.25], dtype=torch.float64)
@@ -208,6 +296,7 @@ def emit_fixture(parts, fx):
     parts.append(emit_int32_scalar(f"mantissaTol_{pre}", fx["mantissa_tol"]))
     parts.append(emit_float_array(f"expectedDequant_{pre}", fx["dequant"]))
     parts.append(emit_float_scalar(f"dequantTol_{pre}", fx["dequant_tol"]))
+    parts.append(emit_float_scalar(f"scaleTol_{pre}", fx["scale_tol"]))
     if fx["xhat"] is not None:
         parts.append(emit_float_array(f"expectedXhat_{pre}", fx["xhat"]))
     parts.append(emit_float_array(f"expectedGroupVarRatio_{pre}", fx["var_ratio"]))

@@ -91,6 +91,9 @@ target_link_libraries(har_fqt_rigl PRIVATE
 
     # Math
     m
+
+    # Windows memory tracking (psapi required for GetProcessMemoryInfo)
+    $<$<PLATFORM_ID:Windows>:psapi>
 )
 
 # ── Build instructions ────────────────────────────────────────────

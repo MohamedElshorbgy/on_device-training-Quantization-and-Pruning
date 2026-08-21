@@ -104,53 +104,165 @@ void rigl_apply_mask(float *weights, const uint8_t *mask, int size)
 
 /* ── Prune-and-Regrow step ───────────────────────────────────────── */
 /*
- * Algorithm:
- *  1. Count active (mask==1) weights → n_active.
- *  2. k = round(frac * n_active)  — number to cycle.
- *  3. PRUNE  : set mask=0 for k active weights with smallest |weight|.
- *  4. REGROW : set mask=1 for k pruned weights with largest  |grad|.
+ * RigL drop-and-grow (Evci et al., ICML 2020):
  *
- * The target sparsity is maintained approximately; exact sparsity is
- * enforced by rigl_actual_sparsity() monitoring in the training loop.
+ *   k = floor(frac × n_active)   — connections to cycle this step
+ *
+ *   DROP  : remove k active connections with smallest |weight|
+ *           → these have least impact on output (weight magnitude criterion)
+ *
+ *   GROW  : add k pruned connections with largest |gradient|
+ *           → these have most potential to reduce loss (gradient criterion)
+ *           → newly grown weights keep value 0; gradient will push them away
+ *
+ * Implementation uses a single-pass threshold scan (O(n)) instead of
+ * k separate passes (O(k×n)), making it practical for large layers.
+ *
+ * Step 1 — find the k-th smallest |weight| among active weights
+ *           (drop threshold)
+ * Step 2 — find the k-th largest  |grad|  among pruned weights
+ *           (grow threshold)
+ * Step 3 — apply both thresholds in one final pass
  */
 void rigl_step(const float *weights, const float *grads,
                uint8_t *mask, int size,
                float sparsity, float frac)
 {
     int n_active = rigl_active_count(mask, size);
-    int k = (int)(frac * (float)n_active + 0.5f);
-    if (k < 1) k = 1;
+    int k = (int)(frac * (float)n_active);   /* floor — paper formula */
+    if (k < 1) { (void)sparsity; return; }   /* nothing to cycle      */
 
-    /* ── PRUNE: k smallest |weight| among active ─────────────────── */
-    /* We sweep k times; each sweep finds and zeroes the current minimum */
-    for (int pass = 0; pass < k; pass++) {
-        float min_val = 1e38f;
-        int   min_idx = -1;
+    /* ── Step 1: DROP threshold — k-th smallest |weight| among active
+     *
+     * Single pass: collect all |weight| values for active weights,
+     * then find the k-th smallest using a simple selection.
+     * We use an insertion-based running top-k buffer of size k.      */
+    float drop_thresh = 0.0f;
+    {
+        /* Find k-th smallest |w| with one linear scan using a max-heap
+         * of size k (kept as an unsorted array for simplicity — k is
+         * usually small, e.g. 20% of a few thousand weights).         */
+        float heap[k];   /* VLA — holds the k smallest values seen so far */
+        int   heap_sz = 0;
+        float heap_max = 0.0f;
+        int   heap_max_i = 0;
+
         for (int i = 0; i < size; i++) {
             if (!mask[i]) continue;
             float v = fabs_local(weights[i]);
-            if (v < min_val) { min_val = v; min_idx = i; }
+            if (heap_sz < k) {
+                heap[heap_sz] = v;
+                if (v > heap_max) { heap_max = v; heap_max_i = heap_sz; }
+                heap_sz++;
+            } else if (v < heap_max) {
+                heap[heap_max_i] = v;
+                /* recompute max */
+                heap_max = heap[0]; heap_max_i = 0;
+                for (int j = 1; j < k; j++)
+                    if (heap[j] > heap_max) { heap_max = heap[j]; heap_max_i = j; }
+            }
         }
-        if (min_idx < 0) break;
-        mask[min_idx] = 0;
+        drop_thresh = heap_max;   /* k-th smallest = largest in the heap */
     }
 
-    /* ── REGROW: k largest |grad| among pruned ───────────────────── */
-    for (int pass = 0; pass < k; pass++) {
-        float max_val = -1.0f;
-        int   max_idx = -1;
+    /* ── Step 2: GROW threshold — k-th largest |grad| among pruned   */
+    float grow_thresh = 0.0f;
+    {
+        /* Find k-th largest |grad| → equivalent to k-th smallest of negated.
+         * Use a min-heap of size k (holds the k largest values).      */
+        float heap[k];
+        int   heap_sz = 0;
+        float heap_min = 0.0f;
+        int   heap_min_i = 0;
+
         for (int i = 0; i < size; i++) {
-            if (mask[i]) continue;  /* already active */
+            if (mask[i]) continue;   /* only pruned candidates */
             float v = fabs_local(grads[i]);
-            if (v > max_val) { max_val = v; max_idx = i; }
+            if (heap_sz < k) {
+                heap[heap_sz] = v;
+                if (heap_sz == 0 || v < heap_min) { heap_min = v; heap_min_i = heap_sz; }
+                heap_sz++;
+            } else if (v > heap_min) {
+                heap[heap_min_i] = v;
+                heap_min = heap[0]; heap_min_i = 0;
+                for (int j = 1; j < k; j++)
+                    if (heap[j] < heap_min) { heap_min = heap[j]; heap_min_i = j; }
+            }
         }
-        if (max_idx < 0) break;
-        mask[max_idx] = 1;
-        /* Newly regrown weights start at zero — will grow via gradient */
-        /* (weights array is not modified here; caller owns that) */
+        grow_thresh = heap_min;   /* k-th largest = smallest in the heap */
     }
 
-    (void)sparsity; /* target sparsity used for init only in this impl */
+    /* ── Step 3: apply drop and grow in a single final pass          */
+    int dropped = 0, grown = 0;
+    for (int i = 0; i < size; i++) {
+        if (mask[i] && dropped < k) {
+            if (fabs_local(weights[i]) <= drop_thresh) {
+                mask[i] = 0;
+                dropped++;
+            }
+        } else if (!mask[i] && grown < k) {
+            if (fabs_local(grads[i]) >= grow_thresh) {
+                mask[i] = 1;
+                /* weight stays 0 — gradient will grow it from scratch */
+                grown++;
+            }
+        }
+    }
+
+    (void)sparsity;
+}
+
+/* ── ERK sparsity distribution ───────────────────────────────────── */
+/*
+ * ERK score for layer i:
+ *   Conv1d : (n_in + n_out + kernel) / (n_in * n_out * kernel)
+ *   Linear : (n_in + n_out)          / (n_in * n_out)
+ *
+ * Scale factor s is chosen so:
+ *   sum_i( s * score_i * sizes_i ) = total_params * (1 - global_sp)
+ *   => s = total_nonzero / sum_i(score_i * sizes_i)
+ *
+ * Per-layer sparsity:
+ *   sp_i = 1 - clamp(s * score_i, 0.01, 1.0)
+ */
+void rigl_erk_sparsities(const rigl_layer_info_t *info,
+                         const int *sizes,
+                         int n_layers,
+                         float global_sp,
+                         float *out_sp)
+{
+    /* Step 1 — compute raw ERK scores */
+    float scores[n_layers];
+    for (int i = 0; i < n_layers; i++) {
+        float num, den;
+        if (info[i].is_conv) {
+            num = (float)(info[i].n_in + info[i].n_out + info[i].kernel);
+            den = (float)(info[i].n_in * info[i].n_out * info[i].kernel);
+        } else {
+            num = (float)(info[i].n_in + info[i].n_out);
+            den = (float)(info[i].n_in * info[i].n_out);
+        }
+        scores[i] = (den > 0.0f) ? (num / den) : 1.0f;
+    }
+
+    /* Step 2 — total params and target non-zero count */
+    int total_params = 0;
+    for (int i = 0; i < n_layers; i++) total_params += sizes[i];
+    float target_nonzero = (float)total_params * (1.0f - global_sp);
+
+    /* Step 3 — compute scale s */
+    float score_sum = 0.0f;
+    for (int i = 0; i < n_layers; i++)
+        score_sum += scores[i] * (float)sizes[i];
+    float s = (score_sum > 0.0f) ? (target_nonzero / score_sum) : 1.0f;
+
+    /* Step 4 — per-layer sparsity = 1 - clamp(s * score, 0.01, 1.0) */
+    for (int i = 0; i < n_layers; i++) {
+        float density = s * scores[i];
+        if (density < 0.01f) density = 0.01f;
+        if (density > 1.00f) density = 1.00f;
+        out_sp[i] = 1.0f - density;
+    }
 }
 
 /* ── Diagnostics ─────────────────────────────────────────────────── */

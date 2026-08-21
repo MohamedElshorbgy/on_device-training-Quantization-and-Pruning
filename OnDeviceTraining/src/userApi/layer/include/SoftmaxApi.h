@@ -5,16 +5,17 @@
 #include "LayerQuant.h"
 #include "Tensor.h"
 
-/* Legacy (pre-2026-05-15 factory API) — retained during PR 1/2 coexistence window. */
-layer_t *softmaxLayerInitLegacy(quantization_t *forwardQ, quantization_t *backwardQ);
-void freeSoftmaxLayerLegacy(layer_t *softmaxLayer);
-
-/*! Borrowing variant — stores lq->forwardMath in forwardQ and
- *  lq->backwardMath in backwardQ verbatim. */
+/*! Borrowing variant — stores lq->outputQ in outputQ and
+ *  lq->propLossQ in propLossQ verbatim.
+ *  Use when: outputQ/propLossQ are shared/long-lived (e.g. reused across
+ *  several layers) and the caller manages their lifetime — they must
+ *  outlive the layer. */
 layer_t *softmaxLayerInit(layerQuant_t *lq);
 
-/*! Owning variant — deep-copies forwardMath + backwardMath via
- *  deepCopyQuantization. */
+/*! Owning variant — deep-copies outputQ + propLossQ via
+ *  deepCopyQuantization.
+ *  Use when: outputQ/propLossQ are stack-locals or one-off configs and you
+ *  want fire-and-forget teardown (freeSoftmaxLayer tears them down too). */
 layer_t *softmaxLayerInitOwning(layerQuant_t *lq);
 
 /*! Tears down the layer. Reads config->ownsQuantizations to decide

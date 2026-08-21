@@ -6,6 +6,14 @@
 typedef void (*conversionFunction_t)(tensor_t *inputTensor, tensor_t *outputTensor);
 
 void convertTensor(tensor_t *inputTensor, tensor_t *outputTensor);
+
+#define ODT_CONVERSION_CHUNK_ELEMS 256
+/* Streams `count` elements of src (FLOAT32/SYM_INT32/SYM/ASYM) starting at
+ * element `elemOffset` into out[] as dequantized floats. Contract:
+ * count <= ODT_CONVERSION_CHUNK_ELEMS, elemOffset % 8 == 0 (packed-width
+ * byte alignment); violations fail fast. */
+void dequantChunkToFloat(const tensor_t *src, size_t elemOffset, size_t count, float *out);
+
 /*! @brief SYM_INT32 -> SYM_INT32 requantization with a FRESH dynamic scale.
  *
  * Pass A (reads only): absMax = max_i |mantissa_i * inScale|.
@@ -49,6 +57,45 @@ void requantSymInt32Tensor(tensor_t *inputTensor, tensor_t *outputTensor);
  * diagonal). */
 void requantSymInt32TensorToScale(tensor_t *inputTensor, tensor_t *outputTensor);
 char *quantTypeToString(qtype_t t);
+/*! SYM_INT32 -> SYM with NO rescale: carry the input scale, pack mantissas
+ *  verbatim. Exits if any mantissa exceeds the target qBits. The no-rescale
+ *  partner of convertSymTensorToSymInt32Tensor (#227). Not a conversionMatrix
+ *  cell (the rescale variant owns [SYM_INT32][SYM]); call directly. */
+void repackSymInt32ToSymNoRescale(tensor_t *inputTensor, tensor_t *outputTensor);
+
+/* Widens n packed srcBits-wide codes to int32 and sign-extends the
+ * two's-complement payload ((v ^ signBit) - signBit). srcStartBit is the BIT
+ * position of the first code within src, so DeltaSym-style decoders can
+ * sign-extend a segment that starts mid-byte; byte-aligned callers pass 0.
+ * Direct-call helper behind every SYM -> * conversionMatrix cell (see
+ * docs/conventions/tensor.md, "Sign-extend on unpack"). srcBits must be > 0;
+ * srcBits >= 32 emits the low 32 bits unextended (full-width codes). */
+void unpackSignExtend(const uint8_t *src, size_t srcBits, size_t srcStartBit, int32_t *dst,
+                      size_t n);
+
+/* Grad-accumulate primitives (PR3, #261). Direct-call only — not conversionMatrix
+ * cells. FixedGrid = fit-preserving: carries the target's scale (first store after
+ * a zero-fill derives it from the increment) and ABORTS on grid overflow (#227
+ * discipline, no clamp). Rescale = requant: fresh absmax (SYM) / fresh affine grid
+ * (ASYM) on every store. n must equal the target's element count. */
+void accumulateFloatIntoSymTensorFixedGrid(tensor_t *target, const float *inc, size_t n);
+void accumulateFloatIntoSymTensorRescale(tensor_t *target, const float *inc, size_t n);
+void accumulateFloatIntoAsymTensorRescale(tensor_t *target, const float *inc, size_t n);
+
+/* Tensor-typed accumulate entry points (#296 Stage 2) — stream the increment
+ * chunk-wise via dequantChunkToFloat; float* variants keep their signatures.
+ * accumulateSymInt32IntoSymInt32Rescale reproduces addSymInt32TensorsInplace's
+ * Strategy-A semantics (dequant both -> float add -> fresh-absmax requant with
+ * the TARGET's roundingMode) in O(chunk); Add.c stays untouched.
+ * accumulateTensorIntoSymFixedGrid/accumulateTensorIntoSymRescale/
+ * accumulateTensorIntoAsymRescale reject a self-aliased increment (increment
+ * and target sharing the same data pointer) with exit(1) — the funnel
+ * epilogue always passes a distinct intermediate (release-review, PR #324). */
+void accumulateTensorIntoSymFixedGrid(tensor_t *target, const tensor_t *increment);
+void accumulateTensorIntoSymRescale(tensor_t *target, const tensor_t *increment);
+void accumulateTensorIntoAsymRescale(tensor_t *target, const tensor_t *increment);
+void accumulateTensorIntoFloat32Inplace(tensor_t *target, const tensor_t *increment);
+void accumulateSymInt32IntoSymInt32Rescale(tensor_t *target, const tensor_t *increment);
 
 extern conversionFunction_t conversionMatrix[6][6];
 

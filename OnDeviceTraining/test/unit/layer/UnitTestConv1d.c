@@ -1,17 +1,20 @@
 #include <stdlib.h>
+#include <string.h>
 
+#include "BorrowedLayer.h"
 #include "Conv1d.h"
 #include "Conv1dApi.h"
+#include "ConvTranspose1dKernel.h"
+#include "DeathTest.h"
 #include "Layer.h"
 #include "QuantizationApi.h"
+#include "StorageApi.h"
+#include "Tensor.h"
 #include "TensorApi.h"
 #include "expected_conv1d.h"
 #include "unity.h"
 
 typedef struct conv1dFixtureSetup {
-    // Pointer-to-caller-stack dims: tensorInitFloat stores a raw pointer, not a copy.
-    // The pointed-to arrays must outlive the tensor — i.e. must live on the test
-    // function's stack, not on conv1dRunForward's stack.
     size_t const *weightDims; // length 3
     size_t const *biasDims;   // length 1 (or NULL when hasBias==0)
     size_t const *inputDims;  // length 3
@@ -37,6 +40,20 @@ typedef struct conv1dRunResult {
     quantization_t *q;
 } conv1dRunResult_t;
 
+static tensor_t *makeFloatTensor(size_t const *dims, size_t numDims, float const *data) {
+    size_t *ownedDims = reserveMemory(numDims * sizeof(size_t));
+    memcpy(ownedDims, dims, numDims * sizeof(size_t));
+    size_t *order = reserveMemory(numDims * sizeof(size_t));
+    setOrderOfDimsForNewTensor(numDims, order);
+    shape_t *shape = reserveMemory(sizeof(shape_t));
+    setShape(shape, ownedDims, numDims, order);
+    tensor_t *t = initTensor(shape, quantizationInitFloat(), NULL);
+    if (data != NULL) {
+        tensorFillFromFloatBuffer(t, data, calcNumberOfElementsByTensor(t));
+    }
+    return t;
+}
+
 // Builds the layer (using direct initConv1dConfigWithWeightsAndBias when groups != 1
 // — bypassing the UserAPI that hardcodes groups=1) and runs forward.
 // Caller owns output buffer.
@@ -48,12 +65,12 @@ static conv1dRunResult_t conv1dRunForward(conv1dFixtureSetup_t s, float *outputB
     // clobber the first.
     conv1dRunResult_t r = {0};
 
-    tensor_t *weightParam = tensorInitFloat((float *)s.weightData, (size_t *)s.weightDims, 3, NULL);
+    tensor_t *weightParam = makeFloatTensor(s.weightDims, 3, s.weightData);
     tensor_t *weightGrad = gradInitFloat(weightParam, NULL);
     r.weights = parameterInit(weightParam, weightGrad);
 
     if (s.hasBias) {
-        tensor_t *biasParam = tensorInitFloat((float *)s.biasData, (size_t *)s.biasDims, 1, NULL);
+        tensor_t *biasParam = makeFloatTensor(s.biasDims, 1, s.biasData);
         tensor_t *biasGrad = gradInitFloat(biasParam, NULL);
         r.bias = parameterInit(biasParam, biasGrad);
     } else {
@@ -70,54 +87,80 @@ static conv1dRunResult_t conv1dRunForward(conv1dFixtureSetup_t s, float *outputB
     }
     r.q = quantizationInitFloat();
 
-    if (s.groups == 1) {
-        r.layer = conv1dLayerInitLegacy(r.weights, r.bias, &kernelStore, r.q, r.q, r.q, r.q);
-    } else {
-        // Phase-2 will expose groups via UserAPI; here we go around the UserAPI.
-        // All statics so their addresses remain valid after this function returns.
-        static conv1dConfig_t cfg;
-        static layerConfig_t lc;
-        static layer_t l;
-        initConv1dConfigWithWeightsAndBias(&cfg, &kernelStore, r.weights, r.bias, s.groups, r.q,
-                                           r.q, r.q, r.q);
-        l.type = CONV1D;
-        lc.conv1d = &cfg;
-        l.config = &lc;
-        r.layer = &l;
-    }
+    // The UserAPI factory (conv1dLayerInit) always allocates its own weights/bias
+    // (KAIMING init requires FLOAT32 storage, LayerCommon.c requireFloat32) and
+    // cannot borrow caller-built parameter_t/kernel_t, so this fixture goes
+    // directly through initConv1dConfigWithWeightsAndBias for every groups value
+    // (all statics so their addresses remain valid after this function returns).
+    static conv1dConfig_t cfg;
+    static layerConfig_t lc;
+    static layer_t l;
+    initConv1dConfigWithWeightsAndBias(&cfg, &kernelStore, r.weights, r.bias, s.groups, r.q, r.q,
+                                       r.q, r.q);
+    l.type = CONV1D;
+    lc.conv1d = &cfg;
+    l.config = &lc;
+    r.layer = &l;
 
-    r.input = tensorInitFloat((float *)s.inputData, (size_t *)s.inputDims, 3, NULL);
-    r.output = tensorInitFloat(outputBuf, (size_t *)s.outputDims, 3, NULL);
+    r.input = makeFloatTensor(s.inputDims, 3, s.inputData);
+    r.output = makeFloatTensor(s.outputDims, 3, NULL);
+    (void)outputBuf;
     conv1dForward(r.layer, r.input, r.output);
 
     return r;
 }
 
+/* Build a SYM_INT32 (HALF_AWAY, qMaxBits=16) tensor from a float fixture: values
+ * are quantized via tensorFillFromFloatBuffer (absmax->scale, round-clamp). The
+ * fixtures are dequant-round-trip-stable (sym_gold.stable_dequant) so the C side
+ * lands on exactly the gold mantissas+scale. NULL vals -> zero mantissas, scale 1.0. */
+static tensor_t *buildSymTensor(size_t numDims, const size_t *dimsIn, const float *vals) {
+    size_t *dims = reserveMemory(numDims * sizeof(size_t));
+    for (size_t i = 0; i < numDims; i++) {
+        dims[i] = dimsIn[i];
+    }
+    size_t *order = reserveMemory(numDims * sizeof(size_t));
+    setOrderOfDimsForNewTensor(numDims, order);
+    shape_t *shape = reserveMemory(sizeof(shape_t));
+    setShape(shape, dims, numDims, order);
+    tensor_t *t = initTensor(shape, quantizationInitSymInt32WithBits(HALF_AWAY, 12), NULL);
+    if (vals != NULL) {
+        tensorFillFromFloatBuffer(t, vals, calcNumberOfElementsByShape(shape));
+    }
+    return t;
+}
+
+static parameter_t *buildSymParam(size_t numDims, const size_t *dimsIn, const float *vals) {
+    tensor_t *p = buildSymTensor(numDims, dimsIn, vals);
+    tensor_t *g = gradInitSymInt32(p, HALF_AWAY, NULL);
+    return parameterInit(p, g);
+}
+
+static float symScaleOf(tensor_t *t) {
+    return ((symInt32QConfig_t *)t->quantization->qConfig)->scale;
+}
+
 void testConv1dForwardMultiChannelWithBias() {
     size_t weightDims[] = {2, 3, 3};
-    tensor_t *weightParam =
-        tensorInitFloat((float *)weight_conv1d_multiChannelWithBias, weightDims, 3, NULL);
+    tensor_t *weightParam = makeFloatTensor(weightDims, 3, weight_conv1d_multiChannelWithBias);
     tensor_t *weightGrad = gradInitFloat(weightParam, NULL);
     parameter_t *weights = parameterInit(weightParam, weightGrad);
 
     size_t biasDims[] = {2};
-    tensor_t *biasParam =
-        tensorInitFloat((float *)bias_conv1d_multiChannelWithBias, biasDims, 1, NULL);
+    tensor_t *biasParam = makeFloatTensor(biasDims, 1, bias_conv1d_multiChannelWithBias);
     tensor_t *biasGrad = gradInitFloat(biasParam, NULL);
     parameter_t *bias = parameterInit(biasParam, biasGrad);
 
     kernel_t kernel;
     initKernel(&kernel, 3, VALID, 1, 1);
     quantization_t *q = quantizationInitFloat();
-    layer_t *conv1d = conv1dLayerInitLegacy(weights, bias, &kernel, q, q, q, q);
+    layer_t *conv1d = buildBorrowedConv1dLayer(weights, bias, &kernel, q);
 
     size_t inputDims[] = {1, 3, 5};
-    tensor_t *input =
-        tensorInitFloat((float *)input_conv1d_multiChannelWithBias, inputDims, 3, NULL);
+    tensor_t *input = makeFloatTensor(inputDims, 3, input_conv1d_multiChannelWithBias);
 
-    float outputData[1 * 2 * 3] = {0};
     size_t outputDims[] = {1, 2, 3};
-    tensor_t *output = tensorInitFloat(outputData, outputDims, 3, NULL);
+    tensor_t *output = makeFloatTensor(outputDims, 3, NULL);
 
     conv1dForward(conv1d, input, output);
 
@@ -127,8 +170,7 @@ void testConv1dForwardMultiChannelWithBias() {
 
 void testConv1dForwardSingleChannelSingleBatch() {
     size_t weightDims[] = {1, 1, 2};
-    tensor_t *weightParam =
-        tensorInitFloat((float *)weight_conv1d_singleChannelSingleBatch, weightDims, 3, NULL);
+    tensor_t *weightParam = makeFloatTensor(weightDims, 3, weight_conv1d_singleChannelSingleBatch);
     tensor_t *weightGrad = gradInitFloat(weightParam, NULL);
     parameter_t *weights = parameterInit(weightParam, weightGrad);
 
@@ -136,15 +178,13 @@ void testConv1dForwardSingleChannelSingleBatch() {
     initKernel(&kernel, 2, VALID, 1, 1);
 
     quantization_t *q = quantizationInitFloat();
-    layer_t *conv1d = conv1dLayerInitLegacy(weights, NULL, &kernel, q, q, q, q);
+    layer_t *conv1d = buildBorrowedConv1dLayer(weights, NULL, &kernel, q);
 
     size_t inputDims[] = {1, 1, 4};
-    tensor_t *input =
-        tensorInitFloat((float *)input_conv1d_singleChannelSingleBatch, inputDims, 3, NULL);
+    tensor_t *input = makeFloatTensor(inputDims, 3, input_conv1d_singleChannelSingleBatch);
 
-    float outputData[3] = {0};
     size_t outputDims[] = {1, 1, 3};
-    tensor_t *output = tensorInitFloat(outputData, outputDims, 3, NULL);
+    tensor_t *output = makeFloatTensor(outputDims, 3, NULL);
 
     conv1dForward(conv1d, input, output);
 
@@ -154,32 +194,26 @@ void testConv1dForwardSingleChannelSingleBatch() {
 
 void testConv1dBackwardSingleChannelWithBias() {
     size_t weightDims[] = {1, 1, 2};
-    tensor_t *weightParam =
-        tensorInitFloat((float *)weight_conv1d_singleChannelWithBias, weightDims, 3, NULL);
-    float weightGradData[2] = {0};
-    tensor_t *weightGrad = tensorInitFloat(weightGradData, weightDims, 3, NULL);
+    tensor_t *weightParam = makeFloatTensor(weightDims, 3, weight_conv1d_singleChannelWithBias);
+    tensor_t *weightGrad = makeFloatTensor(weightDims, 3, NULL);
     parameter_t *weights = parameterInit(weightParam, weightGrad);
 
     size_t biasDims[] = {1};
-    tensor_t *biasParam =
-        tensorInitFloat((float *)bias_conv1d_singleChannelWithBias, biasDims, 1, NULL);
-    float biasGradData[1] = {0};
-    tensor_t *biasGrad = tensorInitFloat(biasGradData, biasDims, 1, NULL);
+    tensor_t *biasParam = makeFloatTensor(biasDims, 1, bias_conv1d_singleChannelWithBias);
+    tensor_t *biasGrad = makeFloatTensor(biasDims, 1, NULL);
     parameter_t *bias = parameterInit(biasParam, biasGrad);
 
     kernel_t kernel;
     initKernel(&kernel, 2, VALID, 1, 1);
     quantization_t *q = quantizationInitFloat();
-    layer_t *conv1d = conv1dLayerInitLegacy(weights, bias, &kernel, q, q, q, q);
+    layer_t *conv1d = buildBorrowedConv1dLayer(weights, bias, &kernel, q);
 
     size_t inputDims[] = {1, 1, 4};
-    tensor_t *input =
-        tensorInitFloat((float *)input_conv1d_singleChannelWithBias, inputDims, 3, NULL);
+    tensor_t *input = makeFloatTensor(inputDims, 3, input_conv1d_singleChannelWithBias);
 
     // forward (sanity — also fills output)
-    float outputData[3] = {0};
     size_t outputDims[] = {1, 1, 3};
-    tensor_t *output = tensorInitFloat(outputData, outputDims, 3, NULL);
+    tensor_t *output = makeFloatTensor(outputDims, 3, NULL);
     conv1dForward(conv1d, input, output);
 
     // lossGrad = ones (matches what the generator used for autograd)
@@ -187,11 +221,10 @@ void testConv1dBackwardSingleChannelWithBias() {
     for (size_t i = 0; i < 3; i++) {
         lossGradData[i] = 1.0f;
     }
-    tensor_t *lossGrad = tensorInitFloat(lossGradData, outputDims, 3, NULL);
+    tensor_t *lossGrad = makeFloatTensor(outputDims, 3, lossGradData);
 
     // propLoss buffer caller-owned, pre-zeroed
-    float propLossData[4] = {0};
-    tensor_t *propLoss = tensorInitFloat(propLossData, inputDims, 3, NULL);
+    tensor_t *propLoss = makeFloatTensor(inputDims, 3, NULL);
 
     conv1dBackward(conv1d, input, lossGrad, propLoss);
 
@@ -206,34 +239,29 @@ void testConv1dBackwardSingleChannelWithBias() {
 
 void testConv1dBackwardSamePaddingSymmetric() {
     size_t weightDims[] = {1, 1, 3};
-    tensor_t *weightParam =
-        tensorInitFloat((float *)weight_conv1d_samePaddingSymmetric, weightDims, 3, NULL);
-    float weightGradData[3] = {0};
-    tensor_t *weightGrad = tensorInitFloat(weightGradData, weightDims, 3, NULL);
+    tensor_t *weightParam = makeFloatTensor(weightDims, 3, weight_conv1d_samePaddingSymmetric);
+    tensor_t *weightGrad = makeFloatTensor(weightDims, 3, NULL);
     parameter_t *weights = parameterInit(weightParam, weightGrad);
 
     kernel_t kernel;
     initKernel(&kernel, 3, SAME, 1, 1);
     quantization_t *q = quantizationInitFloat();
-    layer_t *conv1d = conv1dLayerInitLegacy(weights, NULL, &kernel, q, q, q, q);
+    layer_t *conv1d = buildBorrowedConv1dLayer(weights, NULL, &kernel, q);
 
     size_t inputDims[] = {1, 1, 5};
-    tensor_t *input =
-        tensorInitFloat((float *)input_conv1d_samePaddingSymmetric, inputDims, 3, NULL);
+    tensor_t *input = makeFloatTensor(inputDims, 3, input_conv1d_samePaddingSymmetric);
 
-    float outputData[5] = {0};
     size_t outputDims[] = {1, 1, 5};
-    tensor_t *output = tensorInitFloat(outputData, outputDims, 3, NULL);
+    tensor_t *output = makeFloatTensor(outputDims, 3, NULL);
     conv1dForward(conv1d, input, output);
 
     float lossGradData[5];
     for (size_t i = 0; i < 5; i++) {
         lossGradData[i] = 1.0f;
     }
-    tensor_t *lossGrad = tensorInitFloat(lossGradData, outputDims, 3, NULL);
+    tensor_t *lossGrad = makeFloatTensor(outputDims, 3, lossGradData);
 
-    float propLossData[5] = {0};
-    tensor_t *propLoss = tensorInitFloat(propLossData, inputDims, 3, NULL);
+    tensor_t *propLoss = makeFloatTensor(inputDims, 3, NULL);
 
     conv1dBackward(conv1d, input, lossGrad, propLoss);
 
@@ -327,10 +355,9 @@ void testConv1dBackwardGroupsDepthwise() {
     for (size_t i = 0; i < 16; i++) {
         lossGradData[i] = 1.0f;
     }
-    tensor_t *lossGrad = tensorInitFloat(lossGradData, outputDims, 3, NULL);
+    tensor_t *lossGrad = makeFloatTensor(outputDims, 3, lossGradData);
 
-    float propLossData[1 * 4 * 5] = {0};
-    tensor_t *propLoss = tensorInitFloat(propLossData, inputDims, 3, NULL);
+    tensor_t *propLoss = makeFloatTensor(inputDims, 3, NULL);
 
     conv1dBackward(r.layer, r.input, lossGrad, propLoss);
 
@@ -400,10 +427,9 @@ void testConv1dBackwardGroupsGrouped() {
     for (size_t i = 0; i < 32; i++) {
         lossGradData[i] = 1.0f;
     }
-    tensor_t *lossGrad = tensorInitFloat(lossGradData, outputDims, 3, NULL);
+    tensor_t *lossGrad = makeFloatTensor(outputDims, 3, lossGradData);
 
-    float propLossData[1 * 4 * 5] = {0};
-    tensor_t *propLoss = tensorInitFloat(propLossData, inputDims, 3, NULL);
+    tensor_t *propLoss = makeFloatTensor(inputDims, 3, NULL);
 
     conv1dBackward(r.layer, r.input, lossGrad, propLoss);
 
@@ -504,10 +530,9 @@ void testConv1dBackwardSamePaddingAsymmetric() {
     for (size_t i = 0; i < 5; i++) {
         lossGradData[i] = 1.0f;
     }
-    tensor_t *lossGrad = tensorInitFloat(lossGradData, outputDims, 3, NULL);
+    tensor_t *lossGrad = makeFloatTensor(outputDims, 3, lossGradData);
 
-    float propLossData[5] = {0};
-    tensor_t *propLoss = tensorInitFloat(propLossData, inputDims, 3, NULL);
+    tensor_t *propLoss = makeFloatTensor(inputDims, 3, NULL);
 
     conv1dBackward(r.layer, r.input, lossGrad, propLoss);
 
@@ -577,10 +602,9 @@ void testConv1dBackwardSamePaddingWithGroups() {
     for (size_t i = 0; i < 48; i++) {
         lossGradData[i] = 1.0f;
     }
-    tensor_t *lossGrad = tensorInitFloat(lossGradData, outputDims, 3, NULL);
+    tensor_t *lossGrad = makeFloatTensor(outputDims, 3, lossGradData);
 
-    float propLossData[2 * 4 * 6] = {0};
-    tensor_t *propLoss = tensorInitFloat(propLossData, inputDims, 3, NULL);
+    tensor_t *propLoss = makeFloatTensor(inputDims, 3, NULL);
 
     conv1dBackward(r.layer, r.input, lossGrad, propLoss);
 
@@ -653,10 +677,9 @@ void testConv1dBackwardPointwise() {
     // Non-uniform lossGrad (from the generator), NOT all-ones: pins output-channel
     // dependence in the weight/bias/input gradients — the channel-mixing that defines
     // a pointwise (1x1) conv. See generate_expected_conv1d.py::fixture_pointwise.
-    tensor_t *lossGrad = tensorInitFloat((float *)lossGrad_conv1d_pointwise, outputDims, 3, NULL);
+    tensor_t *lossGrad = makeFloatTensor(outputDims, 3, lossGrad_conv1d_pointwise);
 
-    float propLossData[2 * 3 * 5] = {0};
-    tensor_t *propLoss = tensorInitFloat(propLossData, inputDims, 3, NULL);
+    tensor_t *propLoss = makeFloatTensor(inputDims, 3, NULL);
 
     conv1dBackward(r.layer, r.input, lossGrad, propLoss);
 
@@ -734,11 +757,9 @@ void testConv1dBackwardExplicitPadding() {
 
     // Non-uniform lossGrad (from the generator), NOT all-ones — pins the output
     // channel in dL/dW (see generate_expected_conv1d.py::fixture_explicit_padding).
-    tensor_t *lossGrad =
-        tensorInitFloat((float *)lossGrad_conv1d_explicitPadding, outputDims, 3, NULL);
+    tensor_t *lossGrad = makeFloatTensor(outputDims, 3, lossGrad_conv1d_explicitPadding);
 
-    float propLossData[1 * 2 * 10] = {0};
-    tensor_t *propLoss = tensorInitFloat(propLossData, inputDims, 3, NULL);
+    tensor_t *propLoss = makeFloatTensor(inputDims, 3, NULL);
 
     conv1dBackward(r.layer, r.input, lossGrad, propLoss);
 
@@ -754,6 +775,610 @@ void testConv1dBackwardExplicitPadding() {
         TEST_ASSERT_FLOAT_WITHIN(1e-4f, expectedBiasGrad_conv1d_explicitPadding[i],
                                  ((float *)r.bias->grad->data)[i]);
     }
+}
+
+/* Re-gold (spec D5): conv1dForward now routes SYM through executeOp's
+ * OUT_WRITE epilogue, which requants the raw s_in*s_w accumulator wire
+ * through the conversionMatrix diagonal (requantSymInt32Tensor) instead of
+ * writing it unrestored (pre-PR1b.2 behavior — the fixture this test asserted
+ * against was the raw wire, characterizing exactly what a downstream
+ * Quantization layer used to restore). Dequant-equivalence: restored
+ * mantissa*restoredScale == raw mantissa*rawScale within representation
+ * tolerance (both are exact re-expressions of the same real value at a
+ * different int12 scale) — verified by generate_expected_conv1d.py's
+ * `emulate_sym_conv` self-check (fwd_err <= fwd_tol against the float64
+ * PyTorch-autograd reference, computed on the RESTORED fwd_deq/fwd_scale).
+ * Same re-gold class as Task 2's propLoss/Task 3's LayerNorm forward pins
+ * (ratified spec D5 principle, controller 2026-07-03). Applies identically
+ * to the 3 other testConv1dForwardSym* tests below. */
+void testConv1dForwardSymSingleChannelSingleBatch() {
+    size_t weightDims[] = {1, 1, 2};
+    size_t inputDims[] = {1, 1, 4};
+    size_t outputDims[] = {1, 1, 3};
+
+    parameter_t *weights = buildSymParam(3, weightDims, weight_conv1dSym_singleChannelSingleBatch);
+    tensor_t *input = buildSymTensor(3, inputDims, input_conv1dSym_singleChannelSingleBatch);
+    tensor_t *output = buildSymTensor(3, outputDims, NULL);
+
+    kernel_t kernel;
+    initKernel(&kernel, 2, VALID, 1, 1);
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    layer_t *conv1d = buildBorrowedConv1dLayer(weights, NULL, &kernel, sq);
+
+    conv1dForward(conv1d, input, output);
+
+    int32_t *m = (int32_t *)output->data;
+    for (size_t i = 0; i < expectedForward_conv1dSym_singleChannelSingleBatch_len; i++) {
+        TEST_ASSERT_INT_WITHIN(forwardMantissaTol_conv1dSym_singleChannelSingleBatch,
+                               expectedForward_conv1dSym_singleChannelSingleBatch[i], m[i]);
+    }
+    float scale = symScaleOf(output);
+    TEST_ASSERT_FLOAT_WITHIN(expectedForwardScale_conv1dSym_singleChannelSingleBatch *
+                                 forwardScaleTol_conv1dSym_singleChannelSingleBatch,
+                             expectedForwardScale_conv1dSym_singleChannelSingleBatch, scale);
+    for (size_t i = 0; i < expectedForwardDequant_conv1dSym_singleChannelSingleBatch_len; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(forwardDequantTol_conv1dSym_singleChannelSingleBatch,
+                                 expectedForwardDequant_conv1dSym_singleChannelSingleBatch[i],
+                                 (float)m[i] * scale);
+    }
+}
+
+void testConv1dForwardSymSingleChannelWithBias() {
+    size_t weightDims[] = {1, 1, 2};
+    size_t biasDims[] = {1};
+    size_t inputDims[] = {1, 1, 4};
+    size_t outputDims[] = {1, 1, 3};
+
+    parameter_t *weights = buildSymParam(3, weightDims, weight_conv1dSym_singleChannelWithBias);
+    parameter_t *bias = buildSymParam(1, biasDims, bias_conv1dSym_singleChannelWithBias);
+    tensor_t *input = buildSymTensor(3, inputDims, input_conv1dSym_singleChannelWithBias);
+    tensor_t *output = buildSymTensor(3, outputDims, NULL);
+
+    kernel_t kernel;
+    initKernel(&kernel, 2, VALID, 1, 1);
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    layer_t *conv1d = buildBorrowedConv1dLayer(weights, bias, &kernel, sq);
+
+    conv1dForward(conv1d, input, output);
+
+    int32_t *m = (int32_t *)output->data;
+    for (size_t i = 0; i < expectedForward_conv1dSym_singleChannelWithBias_len; i++) {
+        TEST_ASSERT_INT_WITHIN(forwardMantissaTol_conv1dSym_singleChannelWithBias,
+                               expectedForward_conv1dSym_singleChannelWithBias[i], m[i]);
+    }
+    float scale = symScaleOf(output);
+    TEST_ASSERT_FLOAT_WITHIN(expectedForwardScale_conv1dSym_singleChannelWithBias *
+                                 forwardScaleTol_conv1dSym_singleChannelWithBias,
+                             expectedForwardScale_conv1dSym_singleChannelWithBias, scale);
+    for (size_t i = 0; i < expectedForwardDequant_conv1dSym_singleChannelWithBias_len; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(forwardDequantTol_conv1dSym_singleChannelWithBias,
+                                 expectedForwardDequant_conv1dSym_singleChannelWithBias[i],
+                                 (float)m[i] * scale);
+    }
+}
+
+void testConv1dForwardSymPointwise() {
+    size_t weightDims[] = {4, 3, 1};
+    size_t biasDims[] = {4};
+    size_t inputDims[] = {2, 3, 5};
+    size_t outputDims[] = {2, 4, 5};
+
+    parameter_t *weights = buildSymParam(3, weightDims, weight_conv1dSym_pointwise);
+    parameter_t *bias = buildSymParam(1, biasDims, bias_conv1dSym_pointwise);
+    tensor_t *input = buildSymTensor(3, inputDims, input_conv1dSym_pointwise);
+    tensor_t *output = buildSymTensor(3, outputDims, NULL);
+
+    kernel_t kernel;
+    initKernel(&kernel, 1, VALID, 1, 1);
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    layer_t *conv1d = buildBorrowedConv1dLayer(weights, bias, &kernel, sq);
+
+    conv1dForward(conv1d, input, output);
+
+    int32_t *m = (int32_t *)output->data;
+    for (size_t i = 0; i < expectedForward_conv1dSym_pointwise_len; i++) {
+        TEST_ASSERT_INT_WITHIN(forwardMantissaTol_conv1dSym_pointwise,
+                               expectedForward_conv1dSym_pointwise[i], m[i]);
+    }
+    float scale = symScaleOf(output);
+    TEST_ASSERT_FLOAT_WITHIN(expectedForwardScale_conv1dSym_pointwise *
+                                 forwardScaleTol_conv1dSym_pointwise,
+                             expectedForwardScale_conv1dSym_pointwise, scale);
+    for (size_t i = 0; i < expectedForwardDequant_conv1dSym_pointwise_len; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(forwardDequantTol_conv1dSym_pointwise,
+                                 expectedForwardDequant_conv1dSym_pointwise[i],
+                                 (float)m[i] * scale);
+    }
+}
+
+void testConv1dForwardSymExplicitPadding() {
+    size_t weightDims[] = {3, 2, 7};
+    size_t biasDims[] = {3};
+    size_t inputDims[] = {1, 2, 10};
+    size_t outputDims[] = {1, 3, 5};
+
+    parameter_t *weights = buildSymParam(3, weightDims, weight_conv1dSym_explicitPadding);
+    parameter_t *bias = buildSymParam(1, biasDims, bias_conv1dSym_explicitPadding);
+    tensor_t *input = buildSymTensor(3, inputDims, input_conv1dSym_explicitPadding);
+    tensor_t *output = buildSymTensor(3, outputDims, NULL);
+
+    kernel_t kernel;
+    initKernelExplicit(&kernel, 7, 3, 1, 2);
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    layer_t *conv1d = buildBorrowedConv1dLayer(weights, bias, &kernel, sq);
+
+    conv1dForward(conv1d, input, output);
+
+    int32_t *m = (int32_t *)output->data;
+    for (size_t i = 0; i < expectedForward_conv1dSym_explicitPadding_len; i++) {
+        TEST_ASSERT_INT_WITHIN(forwardMantissaTol_conv1dSym_explicitPadding,
+                               expectedForward_conv1dSym_explicitPadding[i], m[i]);
+    }
+    float scale = symScaleOf(output);
+    TEST_ASSERT_FLOAT_WITHIN(expectedForwardScale_conv1dSym_explicitPadding *
+                                 forwardScaleTol_conv1dSym_explicitPadding,
+                             expectedForwardScale_conv1dSym_explicitPadding, scale);
+    for (size_t i = 0; i < expectedForwardDequant_conv1dSym_explicitPadding_len; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(forwardDequantTol_conv1dSym_explicitPadding,
+                                 expectedForwardDequant_conv1dSym_explicitPadding[i],
+                                 (float)m[i] * scale);
+    }
+}
+
+void testConv1dCalcWeightGradsSymGroupsGrouped() {
+    size_t weightDims[] = {8, 2, 2};
+    size_t biasDims[] = {8};
+    size_t inputDims[] = {1, 4, 5};
+    size_t lossDims[] = {1, 8, 4};
+
+    parameter_t *weights = buildSymParam(3, weightDims, weight_conv1dSym_groupsGroupedSym);
+    parameter_t *bias = buildSymParam(1, biasDims, bias_conv1dSym_groupsGroupedSym);
+    tensor_t *input = buildSymTensor(3, inputDims, input_conv1dSym_groupsGroupedSym);
+    tensor_t *lossGrad = buildSymTensor(3, lossDims, lossGrad_conv1dSym_groupsGroupedSym);
+
+    kernel_t kernel;
+    initKernel(&kernel, 2, VALID, 1, 1);
+    conv1dConfig_t cfg;
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    initConv1dConfigWithWeightsAndBias(&cfg, &kernel, weights, bias, 2, sq, sq, sq, sq);
+
+    conv1dCalcWeightGradsSymInt32(&cfg, input, lossGrad);
+
+    int32_t *m = (int32_t *)weights->grad->data;
+    for (size_t i = 0; i < expectedWeightGrad_conv1dSym_groupsGroupedSym_len; i++) {
+        TEST_ASSERT_INT_WITHIN(weightGradMantissaTol_conv1dSym_groupsGroupedSym,
+                               expectedWeightGrad_conv1dSym_groupsGroupedSym[i], m[i]);
+    }
+    float scale = symScaleOf(weights->grad);
+    TEST_ASSERT_FLOAT_WITHIN(expectedWeightGradScale_conv1dSym_groupsGroupedSym * 1e-4f,
+                             expectedWeightGradScale_conv1dSym_groupsGroupedSym, scale);
+    for (size_t i = 0; i < expectedWeightGradDequant_conv1dSym_groupsGroupedSym_len; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(weightGradDequantTol_conv1dSym_groupsGroupedSym,
+                                 expectedWeightGradDequant_conv1dSym_groupsGroupedSym[i],
+                                 (float)m[i] * scale);
+    }
+}
+
+void testConv1dKernelSymScatterStrideDilation() {
+    size_t weightDims[] = {1, 1, 2};
+    size_t lossDims[] = {1, 1, 3};
+    size_t propDims[] = {1, 1, 9};
+
+    tensor_t *weight = buildSymTensor(3, weightDims, weight_conv1dSym_strideDilationSym);
+    tensor_t *lossGrad = buildSymTensor(3, lossDims, lossGrad_conv1dSym_strideDilationSym);
+    tensor_t *propLoss = buildSymTensor(3, propDims, NULL);
+
+    kernel_t kernel;
+    initKernel(&kernel, 2, VALID, 2, 3); /* size=2, VALID, dilation=2, stride=3 */
+
+    /* Direct low-level kernel call — bypasses conv1dBackward's executeOp
+     * funnel entirely, so this characterizes convTranspose1dKernelSymInt32's
+     * own raw, unrestored output (the RawKernel fixtures), not the
+     * funnel-restored propLoss wire conv1dBackward now produces (design D3;
+     * see testConv1dBackwardSymStrideDilation for that). */
+    convTranspose1dKernelSymInt32(lossGrad, weight, NULL, &kernel, 1, 0, propLoss);
+
+    int32_t *m = (int32_t *)propLoss->data;
+    for (size_t i = 0; i < expectedPropLossRawKernel_conv1dSym_strideDilationSym_len; i++) {
+        TEST_ASSERT_INT_WITHIN(propLossRawKernelMantissaTol_conv1dSym_strideDilationSym,
+                               expectedPropLossRawKernel_conv1dSym_strideDilationSym[i], m[i]);
+    }
+    float scale = symScaleOf(propLoss);
+    TEST_ASSERT_FLOAT_WITHIN(expectedPropLossRawKernelScale_conv1dSym_strideDilationSym * 1e-4f,
+                             expectedPropLossRawKernelScale_conv1dSym_strideDilationSym, scale);
+    for (size_t i = 0; i < expectedPropLossRawKernelDequant_conv1dSym_strideDilationSym_len; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(propLossRawKernelDequantTol_conv1dSym_strideDilationSym,
+                                 expectedPropLossRawKernelDequant_conv1dSym_strideDilationSym[i],
+                                 (float)m[i] * scale);
+    }
+}
+
+void testConv1dCalcBiasGradsSymPointwise() {
+    size_t weightDims[] = {4, 3, 1};
+    size_t biasDims[] = {4};
+    size_t lossDims[] = {2, 4, 5};
+
+    parameter_t *weights = buildSymParam(3, weightDims, weight_conv1dSym_pointwise);
+    parameter_t *bias = buildSymParam(1, biasDims, bias_conv1dSym_pointwise);
+    tensor_t *lossGrad = buildSymTensor(3, lossDims, lossGrad_conv1dSym_pointwise);
+
+    kernel_t kernel;
+    initKernel(&kernel, 1, VALID, 1, 1);
+    conv1dConfig_t cfg;
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    initConv1dConfigWithWeightsAndBias(&cfg, &kernel, weights, bias, 1, sq, sq, sq, sq);
+
+    conv1dCalcBiasGradsSymInt32(&cfg, lossGrad);
+
+    int32_t *m = (int32_t *)bias->grad->data;
+    for (size_t i = 0; i < expectedBiasGrad_conv1dSym_pointwise_len; i++) {
+        TEST_ASSERT_INT_WITHIN(biasGradMantissaTol_conv1dSym_pointwise,
+                               expectedBiasGrad_conv1dSym_pointwise[i], m[i]);
+    }
+    float scale = symScaleOf(bias->grad);
+    TEST_ASSERT_FLOAT_WITHIN(expectedBiasGradScale_conv1dSym_pointwise * 1e-4f,
+                             expectedBiasGradScale_conv1dSym_pointwise, scale);
+    for (size_t i = 0; i < expectedBiasGradDequant_conv1dSym_pointwise_len; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(biasGradDequantTol_conv1dSym_pointwise,
+                                 expectedBiasGradDequant_conv1dSym_pointwise[i],
+                                 (float)m[i] * scale);
+    }
+}
+
+/* Re-gold (spec D5): conv1dBackward's dx wire (propLoss) is a *produced*
+ * wire, not a passthrough — convTranspose1dKernelSymInt32 emits the raw
+ * s_loss*s_w scatter-adjoint mantissa (characterized unrestored above by
+ * testConv1dKernelSymScatterStrideDilation), and executeOp's OUT_WRITE
+ * epilogue then requants it through the conversionMatrix diagonal to
+ * propLossQ's declared width (int12) before conv1dBackward returns it — the
+ * same restoration every other producer wire gets (forward output,
+ * weightGrad, biasGrad). The propLoss expectations below are therefore
+ * POST-restoration values, not the kernel's raw output; the old #187
+ * fail-fast (produced propLoss tensor must be SYM) this file used to lean on
+ * is retired along with the raw-wire validator
+ * (docs/conventions/arithmetic-sym.md). Dequant-equivalence: restored
+ * mantissa*restoredScale == raw mantissa*rawScale within representation
+ * tolerance — verified by generate_expected_conv1d.py's `emulate_sym_conv`
+ * dx section (`_requant_absmax_i12_f32`, dx_err <= dx_tol against the
+ * float64 PyTorch-autograd reference, computed on the RESTORED
+ * dx_deq/dx_scale). Same re-gold class as this file's forward pins above.
+ * Applies identically to the 2 other testConv1dBackwardSym* tests below. */
+void testConv1dBackwardSymExplicitPadding() {
+    size_t weightDims[] = {3, 2, 7};
+    size_t biasDims[] = {3};
+    size_t inputDims[] = {1, 2, 10};
+    size_t outputDims[] = {1, 3, 5};
+
+    parameter_t *weights = buildSymParam(3, weightDims, weight_conv1dSym_explicitPadding);
+    parameter_t *bias = buildSymParam(1, biasDims, bias_conv1dSym_explicitPadding);
+    tensor_t *input = buildSymTensor(3, inputDims, input_conv1dSym_explicitPadding);
+    tensor_t *lossGrad = buildSymTensor(3, outputDims, lossGrad_conv1dSym_explicitPadding);
+    tensor_t *propLoss = buildSymTensor(3, inputDims, NULL);
+
+    kernel_t kernel;
+    initKernelExplicit(&kernel, 7, 3, 1, 2); /* K=7, pad=3, dilation=1, stride=2 */
+    conv1dConfig_t cfg;
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    static layerConfig_t lc;
+    static layer_t layer;
+    initConv1dConfigWithWeightsAndBias(&cfg, &kernel, weights, bias, 1, sq, sq, sq, sq);
+    layer.type = CONV1D;
+    lc.conv1d = &cfg;
+    layer.config = &lc;
+
+    conv1dBackward(&layer, input, lossGrad, propLoss);
+
+    /* propLoss (dx) */
+    int32_t *dx = (int32_t *)propLoss->data;
+    for (size_t i = 0; i < expectedPropLoss_conv1dSym_explicitPadding_len; i++) {
+        TEST_ASSERT_INT_WITHIN(propLossMantissaTol_conv1dSym_explicitPadding,
+                               expectedPropLoss_conv1dSym_explicitPadding[i], dx[i]);
+    }
+    float dxScale = symScaleOf(propLoss);
+    TEST_ASSERT_FLOAT_WITHIN(expectedPropLossScale_conv1dSym_explicitPadding * 1e-4f,
+                             expectedPropLossScale_conv1dSym_explicitPadding, dxScale);
+    for (size_t i = 0; i < expectedPropLossDequant_conv1dSym_explicitPadding_len; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(propLossDequantTol_conv1dSym_explicitPadding,
+                                 expectedPropLossDequant_conv1dSym_explicitPadding[i],
+                                 (float)dx[i] * dxScale);
+    }
+    /* weightGrad */
+    int32_t *dw = (int32_t *)weights->grad->data;
+    float dwScale = symScaleOf(weights->grad);
+    for (size_t i = 0; i < expectedWeightGrad_conv1dSym_explicitPadding_len; i++) {
+        TEST_ASSERT_INT_WITHIN(weightGradMantissaTol_conv1dSym_explicitPadding,
+                               expectedWeightGrad_conv1dSym_explicitPadding[i], dw[i]);
+        TEST_ASSERT_FLOAT_WITHIN(weightGradDequantTol_conv1dSym_explicitPadding,
+                                 expectedWeightGradDequant_conv1dSym_explicitPadding[i],
+                                 (float)dw[i] * dwScale);
+    }
+    /* biasGrad */
+    int32_t *db = (int32_t *)bias->grad->data;
+    float dbScale = symScaleOf(bias->grad);
+    for (size_t i = 0; i < expectedBiasGrad_conv1dSym_explicitPadding_len; i++) {
+        TEST_ASSERT_INT_WITHIN(biasGradMantissaTol_conv1dSym_explicitPadding,
+                               expectedBiasGrad_conv1dSym_explicitPadding[i], db[i]);
+        TEST_ASSERT_FLOAT_WITHIN(biasGradDequantTol_conv1dSym_explicitPadding,
+                                 expectedBiasGradDequant_conv1dSym_explicitPadding[i],
+                                 (float)db[i] * dbScale);
+    }
+}
+
+void testConv1dBackwardSymGroupsGrouped() {
+    size_t weightDims[] = {8, 2, 2};
+    size_t biasDims[] = {8};
+    size_t inputDims[] = {1, 4, 5};
+    size_t outputDims[] = {1, 8, 4};
+
+    parameter_t *weights = buildSymParam(3, weightDims, weight_conv1dSym_groupsGroupedSym);
+    parameter_t *bias = buildSymParam(1, biasDims, bias_conv1dSym_groupsGroupedSym);
+    tensor_t *input = buildSymTensor(3, inputDims, input_conv1dSym_groupsGroupedSym);
+    tensor_t *lossGrad = buildSymTensor(3, outputDims, lossGrad_conv1dSym_groupsGroupedSym);
+    tensor_t *propLoss = buildSymTensor(3, inputDims, NULL);
+
+    kernel_t kernel;
+    initKernel(&kernel, 2, VALID, 1, 1);
+    conv1dConfig_t cfg;
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    static layerConfig_t lc;
+    static layer_t layer;
+    initConv1dConfigWithWeightsAndBias(&cfg, &kernel, weights, bias, 2, sq, sq, sq, sq);
+    layer.type = CONV1D;
+    lc.conv1d = &cfg;
+    layer.config = &lc;
+
+    conv1dBackward(&layer, input, lossGrad, propLoss);
+
+    /* propLoss (dx) */
+    int32_t *dx = (int32_t *)propLoss->data;
+    for (size_t i = 0; i < expectedPropLoss_conv1dSym_groupsGroupedSym_len; i++) {
+        TEST_ASSERT_INT_WITHIN(propLossMantissaTol_conv1dSym_groupsGroupedSym,
+                               expectedPropLoss_conv1dSym_groupsGroupedSym[i], dx[i]);
+    }
+    float dxScale = symScaleOf(propLoss);
+    TEST_ASSERT_FLOAT_WITHIN(expectedPropLossScale_conv1dSym_groupsGroupedSym * 1e-4f,
+                             expectedPropLossScale_conv1dSym_groupsGroupedSym, dxScale);
+    for (size_t i = 0; i < expectedPropLossDequant_conv1dSym_groupsGroupedSym_len; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(propLossDequantTol_conv1dSym_groupsGroupedSym,
+                                 expectedPropLossDequant_conv1dSym_groupsGroupedSym[i],
+                                 (float)dx[i] * dxScale);
+    }
+    /* weightGrad */
+    int32_t *dw = (int32_t *)weights->grad->data;
+    float dwScale = symScaleOf(weights->grad);
+    for (size_t i = 0; i < expectedWeightGrad_conv1dSym_groupsGroupedSym_len; i++) {
+        TEST_ASSERT_INT_WITHIN(weightGradMantissaTol_conv1dSym_groupsGroupedSym,
+                               expectedWeightGrad_conv1dSym_groupsGroupedSym[i], dw[i]);
+        TEST_ASSERT_FLOAT_WITHIN(weightGradDequantTol_conv1dSym_groupsGroupedSym,
+                                 expectedWeightGradDequant_conv1dSym_groupsGroupedSym[i],
+                                 (float)dw[i] * dwScale);
+    }
+    /* biasGrad */
+    int32_t *db = (int32_t *)bias->grad->data;
+    float dbScale = symScaleOf(bias->grad);
+    for (size_t i = 0; i < expectedBiasGrad_conv1dSym_groupsGroupedSym_len; i++) {
+        TEST_ASSERT_INT_WITHIN(biasGradMantissaTol_conv1dSym_groupsGroupedSym,
+                               expectedBiasGrad_conv1dSym_groupsGroupedSym[i], db[i]);
+        TEST_ASSERT_FLOAT_WITHIN(biasGradDequantTol_conv1dSym_groupsGroupedSym,
+                                 expectedBiasGradDequant_conv1dSym_groupsGroupedSym[i],
+                                 (float)db[i] * dbScale);
+    }
+}
+
+void testConv1dBackwardSymStrideDilation() {
+    size_t weightDims[] = {1, 1, 2};
+    size_t inputDims[] = {1, 1, 9};
+    size_t outputDims[] = {1, 1, 3};
+
+    parameter_t *weights = buildSymParam(3, weightDims, weight_conv1dSym_strideDilationSym);
+    tensor_t *input = buildSymTensor(3, inputDims, input_conv1dSym_strideDilationSym);
+    tensor_t *lossGrad = buildSymTensor(3, outputDims, lossGrad_conv1dSym_strideDilationSym);
+    tensor_t *propLoss = buildSymTensor(3, inputDims, NULL);
+
+    kernel_t kernel;
+    initKernel(&kernel, 2, VALID, 2, 3); /* size=2, VALID, dilation=2, stride=3 */
+    conv1dConfig_t cfg;
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    static layerConfig_t lc;
+    static layer_t layer;
+    initConv1dConfigWithWeightsAndBias(&cfg, &kernel, weights, NULL, 1, sq, sq, sq, sq);
+    layer.type = CONV1D;
+    lc.conv1d = &cfg;
+    layer.config = &lc;
+
+    conv1dBackward(&layer, input, lossGrad, propLoss);
+
+    /* propLoss (dx) */
+    int32_t *dx = (int32_t *)propLoss->data;
+    for (size_t i = 0; i < expectedPropLoss_conv1dSym_strideDilationSym_len; i++) {
+        TEST_ASSERT_INT_WITHIN(propLossMantissaTol_conv1dSym_strideDilationSym,
+                               expectedPropLoss_conv1dSym_strideDilationSym[i], dx[i]);
+    }
+    float dxScale = symScaleOf(propLoss);
+    TEST_ASSERT_FLOAT_WITHIN(expectedPropLossScale_conv1dSym_strideDilationSym * 1e-4f,
+                             expectedPropLossScale_conv1dSym_strideDilationSym, dxScale);
+    for (size_t i = 0; i < expectedPropLossDequant_conv1dSym_strideDilationSym_len; i++) {
+        TEST_ASSERT_FLOAT_WITHIN(propLossDequantTol_conv1dSym_strideDilationSym,
+                                 expectedPropLossDequant_conv1dSym_strideDilationSym[i],
+                                 (float)dx[i] * dxScale);
+    }
+    /* weightGrad */
+    int32_t *dw = (int32_t *)weights->grad->data;
+    float dwScale = symScaleOf(weights->grad);
+    for (size_t i = 0; i < expectedWeightGrad_conv1dSym_strideDilationSym_len; i++) {
+        TEST_ASSERT_INT_WITHIN(weightGradMantissaTol_conv1dSym_strideDilationSym,
+                               expectedWeightGrad_conv1dSym_strideDilationSym[i], dw[i]);
+        TEST_ASSERT_FLOAT_WITHIN(weightGradDequantTol_conv1dSym_strideDilationSym,
+                                 expectedWeightGradDequant_conv1dSym_strideDilationSym[i],
+                                 (float)dw[i] * dwScale);
+    }
+    /* no biasGrad: bias == NULL */
+}
+
+/* ---------------------------------------------------------------------------
+ * Shape-guard death tests (#232).
+ *
+ * The weightGrad helpers stride into lossGrad by `batch` (from forwardInput) and
+ * write the weight grad by `outChannels` (from lossGrad). A mis-shaped lossGrad
+ * is therefore a latent OOB read (too-few batches) / OOB write (outChannels !=
+ * weight Cout). Each guard must fail-fast via exit(1). FLOAT helpers are static,
+ * so they are exercised through the public conv1dBackward entry point; the SYM
+ * helpers are exported and called directly. Data is all-zero — the guards read
+ * shapes only and fire before any allocation or accumulation.
+ * ------------------------------------------------------------------------- */
+
+void testConv1dWeightGradFloatRejectsBatchMismatch() {
+    size_t weightDims[] = {1, 1, 2};
+    size_t inputDims[] = {2, 1, 5}; // forward batch 2
+    size_t outputDims[] = {2, 1, 4};
+    float weightData[2] = {0};
+    float inputData[10] = {0};
+    float outBuf[8] = {0};
+    conv1dFixtureSetup_t s = {
+        .weightDims = weightDims,
+        .biasDims = NULL,
+        .inputDims = inputDims,
+        .outputDims = outputDims,
+        .hasBias = 0,
+        .kSize = 2,
+        .padding = VALID,
+        .paddingAmount = 0,
+        .dilation = 1,
+        .stride = 1,
+        .groups = 1,
+        .weightData = weightData,
+        .biasData = NULL,
+        .inputData = inputData,
+    };
+    conv1dRunResult_t r = conv1dRunForward(s, outBuf);
+
+    size_t lossDims[] = {1, 1, 4}; // lossGrad batch 1 != forward batch 2
+    float lossData[4] = {0};
+    tensor_t *lossGrad = makeFloatTensor(lossDims, 3, lossData);
+    size_t propDims[] = {2, 1, 5};
+    tensor_t *propLoss = makeFloatTensor(propDims, 3, NULL);
+
+    ASSERT_EXITS_WITH_FAILURE(conv1dBackward(r.layer, r.input, lossGrad, propLoss));
+}
+
+void testConv1dWeightGradFloatRejectsOutChannelMismatch() {
+    size_t weightDims[] = {1, 1, 2}; // weight Cout = 1
+    size_t inputDims[] = {1, 1, 5};
+    size_t outputDims[] = {1, 1, 4};
+    float weightData[2] = {0};
+    float inputData[5] = {0};
+    float outBuf[4] = {0};
+    conv1dFixtureSetup_t s = {
+        .weightDims = weightDims,
+        .biasDims = NULL,
+        .inputDims = inputDims,
+        .outputDims = outputDims,
+        .hasBias = 0,
+        .kSize = 2,
+        .padding = VALID,
+        .paddingAmount = 0,
+        .dilation = 1,
+        .stride = 1,
+        .groups = 1,
+        .weightData = weightData,
+        .biasData = NULL,
+        .inputData = inputData,
+    };
+    conv1dRunResult_t r = conv1dRunForward(s, outBuf);
+
+    size_t lossDims[] = {1, 3, 4}; // outChannels 3 != weight Cout 1
+    float lossData[12] = {0};
+    tensor_t *lossGrad = makeFloatTensor(lossDims, 3, lossData);
+    size_t propDims[] = {1, 1, 5};
+    tensor_t *propLoss = makeFloatTensor(propDims, 3, NULL);
+
+    ASSERT_EXITS_WITH_FAILURE(conv1dBackward(r.layer, r.input, lossGrad, propLoss));
+}
+
+void testConv1dWeightGradSymRejectsBatchMismatch() {
+    size_t weightDims[] = {8, 2, 2};
+    size_t inputDims[] = {2, 4, 5}; // forward batch 2
+    size_t lossDims[] = {1, 8, 4};  // lossGrad batch 1 != forward batch 2
+
+    parameter_t *weights = buildSymParam(3, weightDims, NULL);
+    tensor_t *input = buildSymTensor(3, inputDims, NULL);
+    tensor_t *lossGrad = buildSymTensor(3, lossDims, NULL);
+
+    kernel_t kernel;
+    initKernel(&kernel, 2, VALID, 1, 1);
+    conv1dConfig_t cfg;
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    initConv1dConfigWithWeightsAndBias(&cfg, &kernel, weights, NULL, 2, sq, sq, sq, sq);
+
+    ASSERT_EXITS_WITH_FAILURE(conv1dCalcWeightGradsSymInt32(&cfg, input, lossGrad));
+}
+
+void testConv1dWeightGradSymRejectsOutChannelMismatch() {
+    size_t weightDims[] = {8, 2, 2}; // weight Cout = 8
+    size_t inputDims[] = {1, 4, 5};
+    size_t lossDims[] = {1, 10, 4}; // outChannels 10 != weight Cout 8
+
+    parameter_t *weights = buildSymParam(3, weightDims, NULL);
+    tensor_t *input = buildSymTensor(3, inputDims, NULL);
+    tensor_t *lossGrad = buildSymTensor(3, lossDims, NULL);
+
+    kernel_t kernel;
+    initKernel(&kernel, 2, VALID, 1, 1);
+    conv1dConfig_t cfg;
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    initConv1dConfigWithWeightsAndBias(&cfg, &kernel, weights, NULL, 2, sq, sq, sq, sq);
+
+    ASSERT_EXITS_WITH_FAILURE(conv1dCalcWeightGradsSymInt32(&cfg, input, lossGrad));
+}
+
+void testConv1dBiasGradFloatRejectsOutChannelMismatch() {
+    /* weight Cout == lossGrad outChannels so the weightGrad guard passes; bias
+     * Cout differs, so the biasGrad guard must fire. The layer is intentionally
+     * inconsistent, so forward is skipped (it would OOB-read bias in the parent);
+     * the layer is built directly and only backward is exercised, in the child. */
+    size_t weightDims[] = {2, 1, 2}; // weight Cout = 2
+    size_t biasDims[] = {1};         // bias Cout = 1 (intentionally inconsistent)
+    size_t inputDims[] = {1, 1, 5};
+    float weightData[4] = {0};
+    float biasData[1] = {0};
+    float inputData[5] = {0};
+
+    tensor_t *weightParam = makeFloatTensor(weightDims, 3, weightData);
+    parameter_t *weights = parameterInit(weightParam, gradInitFloat(weightParam, NULL));
+    tensor_t *biasParam = makeFloatTensor(biasDims, 1, biasData);
+    parameter_t *bias = parameterInit(biasParam, gradInitFloat(biasParam, NULL));
+
+    kernel_t kernel;
+    initKernel(&kernel, 2, VALID, 1, 1);
+    quantization_t *q = quantizationInitFloat();
+    layer_t *layer = buildBorrowedConv1dLayer(weights, bias, &kernel, q);
+
+    tensor_t *input = makeFloatTensor(inputDims, 3, inputData);
+    size_t lossDims[] = {1, 2, 4}; // outChannels 2 == weight Cout, != bias Cout 1
+    float lossData[8] = {0};
+    tensor_t *lossGrad = makeFloatTensor(lossDims, 3, lossData);
+    size_t propDims[] = {1, 1, 5};
+    tensor_t *propLoss = makeFloatTensor(propDims, 3, NULL);
+
+    ASSERT_EXITS_WITH_FAILURE(conv1dBackward(layer, input, lossGrad, propLoss));
+}
+
+void testConv1dBiasGradSymRejectsOutChannelMismatch() {
+    size_t weightDims[] = {3, 1, 1}; // K=1 to satisfy the config kernel-size check
+    size_t biasDims[] = {1};         // bias Cout = 1
+    size_t lossDims[] = {1, 3, 4};   // outChannels 3 != bias Cout 1
+
+    parameter_t *weights = buildSymParam(3, weightDims, NULL);
+    parameter_t *bias = buildSymParam(1, biasDims, NULL);
+    tensor_t *lossGrad = buildSymTensor(3, lossDims, NULL);
+
+    kernel_t kernel;
+    initKernel(&kernel, 1, VALID, 1, 1);
+    conv1dConfig_t cfg;
+    quantization_t *sq = quantizationInitSymInt32(HALF_AWAY);
+    initConv1dConfigWithWeightsAndBias(&cfg, &kernel, weights, bias, 1, sq, sq, sq, sq);
+
+    ASSERT_EXITS_WITH_FAILURE(conv1dCalcBiasGradsSymInt32(&cfg, lossGrad));
 }
 
 void setUp() {}
@@ -779,5 +1404,21 @@ int main() {
     RUN_TEST(testConv1dBackwardPointwise);
     RUN_TEST(testConv1dForwardExplicitPadding);
     RUN_TEST(testConv1dBackwardExplicitPadding);
+    RUN_TEST(testConv1dForwardSymSingleChannelSingleBatch);
+    RUN_TEST(testConv1dForwardSymSingleChannelWithBias);
+    RUN_TEST(testConv1dForwardSymPointwise);
+    RUN_TEST(testConv1dForwardSymExplicitPadding);
+    RUN_TEST(testConv1dKernelSymScatterStrideDilation);
+    RUN_TEST(testConv1dCalcWeightGradsSymGroupsGrouped);
+    RUN_TEST(testConv1dCalcBiasGradsSymPointwise);
+    RUN_TEST(testConv1dBackwardSymExplicitPadding);
+    RUN_TEST(testConv1dBackwardSymGroupsGrouped);
+    RUN_TEST(testConv1dBackwardSymStrideDilation);
+    RUN_TEST(testConv1dWeightGradFloatRejectsBatchMismatch);
+    RUN_TEST(testConv1dWeightGradFloatRejectsOutChannelMismatch);
+    RUN_TEST(testConv1dWeightGradSymRejectsBatchMismatch);
+    RUN_TEST(testConv1dWeightGradSymRejectsOutChannelMismatch);
+    RUN_TEST(testConv1dBiasGradFloatRejectsOutChannelMismatch);
+    RUN_TEST(testConv1dBiasGradSymRejectsOutChannelMismatch);
     return UNITY_END();
 }

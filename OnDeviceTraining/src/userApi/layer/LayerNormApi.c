@@ -4,6 +4,7 @@
 
 #include "LayerNormApi.h"
 
+#include "ArithmeticType.h"
 #include "Common.h"
 #include "Layer.h"
 #include "LayerNorm.h"
@@ -31,8 +32,9 @@ static shape_t *buildOwnedShape(const size_t *srcDims, size_t numberOfDims) {
 
 /* Constant fill via tensorFillFromFloatBuffer: plain memcpy for FLOAT32; for
  * SYM_INT32 it routes through convertFloatTensorToSymInt32Tensor, which IS
- * the spec's parameter quantization (all-ones -> mantissa 32767, scale
- * 1/32767; all-zeros -> mantissa 0, scale 1.0 via the absMax==0 guard).
+ * the spec's parameter quantization (all-ones -> mantissa 2047, scale
+ * 1/2047 (#227 int12 operand default); all-zeros -> mantissa 0, scale 1.0
+ * via the absMax==0 guard).
  * initDistribution cannot be used here: it is FLOAT32-only by guard, and
  * extending it is Issue-C scope. */
 static void fillParamTensorWithConstant(tensor_t *paramTensor, float value) {
@@ -46,8 +48,8 @@ static void fillParamTensorWithConstant(tensor_t *paramTensor, float value) {
 }
 
 /* gamma: shape normalizedShape, init all-ones (FLOAT32: 1.0f each; SYM_INT32:
- * mantissa 32767, scale 1/32767); grad dtype from gradQ (= the profile's
- * backwardMath). */
+ * mantissa 2047, scale 1/2047 (#227 int12 operand default)); grad dtype from
+ * gradQ (= the profile's backwardMath). */
 static parameter_t *allocateLayerNormGamma(const size_t *normalizedShape, size_t numNormDims,
                                            quantization_t *storageQ, quantization_t *gradQ) {
     shape_t *shape = buildOwnedShape(normalizedShape, numNormDims);
@@ -99,12 +101,12 @@ static void validateLayerQuantForLayerNorm(layerQuant_t *lq) {
         PRINT_ERROR("layerNormLayerInit: lq pointer is NULL");
         exit(1);
     }
-    if (lq->forwardMath == NULL) {
-        PRINT_ERROR("layerNormLayerInit: layerQuant.forwardMath must be set");
+    if (lq->outputQ == NULL) {
+        PRINT_ERROR("layerNormLayerInit: layerQuant.outputQ must be set");
         exit(1);
     }
-    if (lq->backwardMath == NULL) {
-        PRINT_ERROR("layerNormLayerInit: layerQuant.backwardMath must be set");
+    if (lq->propLossQ == NULL) {
+        PRINT_ERROR("layerNormLayerInit: layerQuant.propLossQ must be set");
         exit(1);
     }
     if (lq->weightStorage == NULL) {
@@ -124,14 +126,14 @@ static void validateLayerQuantForLayerNorm(layerQuant_t *lq) {
         exit(1);
     }
     /* The kernels read gamma/beta in the forward dtype: a FLOAT32 kernel over
-     * SYM mantissas (or vice versa) is silent garbage. Fail at construction. */
-    if (lq->weightStorage->type != lq->forwardMath->type ||
-        lq->biasStorage->type != lq->forwardMath->type) {
+     * SYM mantissas (or vice versa) is silent garbage. Fail at construction.
+     * lq->forwardMath is now the declared arithmetic directly (by value); the
+     * storage dtype is bridged through the same derivation the runtime uses
+     * so a storage-only dtype (ASYM/SYM/BOOL/INT32) compares against its
+     * ARITH_FLOAT32 bridge, not its raw qtype_t. */
+    if (arithmeticFromQuantization(lq->weightStorage).type != lq->forwardMath.type ||
+        arithmeticFromQuantization(lq->biasStorage).type != lq->forwardMath.type) {
         PRINT_ERROR("layerNormLayerInit: gamma/beta storage type must match forwardMath");
-        exit(1);
-    }
-    if (lq->backwardMath->type != FLOAT32 && lq->backwardMath->type != SYM_INT32) {
-        PRINT_ERROR("layerNormLayerInit: backwardMath must be FLOAT32 or SYM_INT32");
         exit(1);
     }
     /* The SYM_INT32 backward recomputes group stats from forwardInput's int32
@@ -139,7 +141,7 @@ static void validateLayerQuantForLayerNorm(layerQuant_t *lq) {
      * buffers hold float bits — silent garbage. The REVERSE (SYM forwardMath +
      * FLOAT32 backwardMath) stays constructible: it is the inference-only
      * profile, and the runtime backward guard rejects training it. */
-    if (lq->backwardMath->type == SYM_INT32 && lq->forwardMath->type != SYM_INT32) {
+    if (lq->propLossMath.type == ARITH_SYM_INT32 && lq->forwardMath.type != ARITH_SYM_INT32) {
         PRINT_ERROR("layerNormLayerInit: SYM_INT32 backwardMath requires SYM_INT32 forwardMath");
         exit(1);
     }
@@ -165,10 +167,18 @@ static layer_t *layerNormLayerInitCommon(layerNormInit_t *init, layerQuant_t *lq
     layerCfg->layerNorm = cfg;
     layer->config = layerCfg;
 
+    /* Grad storage knob (#261, PR1c): NULL falls back to a hard-pinned FLOAT32
+     * default (parameter grads are persistent state — SYM_INT32 is a compute
+     * format, not storage); a non-NULL weightGradStorage/biasGradStorage
+     * overrides it explicitly to opt back into SYM_INT32 (or another dtype). */
+    quantization_t *floatGradQ = quantizationInitFloat();
+    quantization_t *gammaGradQ = lq->weightGradStorage != NULL ? lq->weightGradStorage : floatGradQ;
+    quantization_t *betaGradQ = lq->biasGradStorage != NULL ? lq->biasGradStorage : floatGradQ;
     parameter_t *gamma = allocateLayerNormGamma(init->normalizedShape, init->numNormDims,
-                                                lq->weightStorage, lq->backwardMath);
-    parameter_t *beta = allocateLayerNormBeta(init->normalizedShape, init->numNormDims,
-                                              lq->biasStorage, lq->backwardMath);
+                                                lq->weightStorage, gammaGradQ);
+    parameter_t *beta =
+        allocateLayerNormBeta(init->normalizedShape, init->numNormDims, lq->biasStorage, betaGradQ);
+    freeQuantization(floatGradQ);
 
     /* Factory-owned copy of normalizedShape (caller may free its own array). */
     size_t *normShapeCopy = reserveMemory(init->numNormDims * sizeof(size_t));
@@ -187,11 +197,16 @@ layer_t *layerNormLayerInit(layerNormInit_t *init, layerQuant_t *lq) {
     layerNormConfig_t *cfg;
     layer_t *layer = layerNormLayerInitCommon(init, lq, &cfg);
 
-    /* Borrowing: store the two math quant pointers verbatim. The caller owns
-     * forwardMath/backwardMath and frees them; freeLayerNormLayer leaves them
+    /* Borrowing: store the storage pointers verbatim; the arithmetic slots are
+     * plain by-value copies of lq's declared math. The caller owns
+     * outputQ/propLossQ and frees them; freeLayerNormLayer leaves them
      * untouched (ownsQuantizations=false). */
-    cfg->forwardQ = lq->forwardMath;
-    cfg->backwardQ = lq->backwardMath;
+    cfg->forwardMath = lq->forwardMath;
+    cfg->propLossMath = lq->propLossMath;
+    cfg->outputQ = lq->outputQ;
+    cfg->propLossQ = lq->propLossQ;
+    cfg->weightGradAccMode = lq->weightGradAccMode;
+    cfg->biasGradAccMode = lq->biasGradAccMode;
     cfg->ownsQuantizations = false;
 
     return layer;
@@ -201,11 +216,15 @@ layer_t *layerNormLayerInitOwning(layerNormInit_t *init, layerQuant_t *lq) {
     layerNormConfig_t *cfg;
     layer_t *layer = layerNormLayerInitCommon(init, lq, &cfg);
 
-    /* Owning: deep-copy each math quantization so the caller can drop its
-     * forwardMath/backwardMath pointers immediately. freeLayerNormLayer tears
+    /* Owning: deep-copy each storage quantization so the caller can drop its
+     * outputQ/propLossQ pointers immediately. freeLayerNormLayer tears
      * the copies down (ownsQuantizations=true). Mirrors linearLayerInitOwning. */
-    cfg->forwardQ = deepCopyQuantization(lq->forwardMath);
-    cfg->backwardQ = deepCopyQuantization(lq->backwardMath);
+    cfg->forwardMath = lq->forwardMath;
+    cfg->propLossMath = lq->propLossMath;
+    cfg->outputQ = deepCopyQuantization(lq->outputQ);
+    cfg->propLossQ = deepCopyQuantization(lq->propLossQ);
+    cfg->weightGradAccMode = lq->weightGradAccMode;
+    cfg->biasGradAccMode = lq->biasGradAccMode;
     cfg->ownsQuantizations = true;
 
     return layer;
@@ -228,20 +247,20 @@ void freeLayerNormLayer(layer_t *layer) {
     }
     freeReservedMemory(cfg->normalizedShape);
 
-    /* Owning-variant only — tear down the two math quantization_t (qConfig +
-     * struct). Dedup guard exactly like freeLinearLayer: free backwardQ only if
-     * it is a distinct allocation from forwardQ. The Owning factory always
+    /* Owning-variant only — tear down the two storage quantization_t (qConfig +
+     * struct). Dedup guard exactly like freeLinearLayer: free propLossQ only if
+     * it is a distinct allocation from outputQ. The Owning factory always
      * deep-copies into two separate instances, so the guard is a defensive
      * measure; the Borrowing variant has ownsQuantizations=false and skips this
      * branch (caller frees them). */
     if (cfg->ownsQuantizations) {
-        if (cfg->forwardQ != NULL) {
-            freeReservedMemory(cfg->forwardQ->qConfig);
-            freeReservedMemory(cfg->forwardQ);
+        if (cfg->outputQ != NULL) {
+            freeReservedMemory(cfg->outputQ->qConfig);
+            freeReservedMemory(cfg->outputQ);
         }
-        if (cfg->backwardQ != NULL && cfg->backwardQ != cfg->forwardQ) {
-            freeReservedMemory(cfg->backwardQ->qConfig);
-            freeReservedMemory(cfg->backwardQ);
+        if (cfg->propLossQ != NULL && cfg->propLossQ != cfg->outputQ) {
+            freeReservedMemory(cfg->propLossQ->qConfig);
+            freeReservedMemory(cfg->propLossQ);
         }
     }
 

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ArithmeticType.h"
 #include "Common.h"
 #include "Comparison.h"
 #include "DTypes.h"
@@ -11,8 +12,10 @@
 #include "Tensor.h"
 
 void reluInitConfig(reluConfig_t *reluConfig, quantization_t *forwardQ, quantization_t *backwardQ) {
-    reluConfig->forwardQ = forwardQ;
-    reluConfig->backwardQ = backwardQ;
+    reluConfig->forwardMath = arithmeticFromQuantizationOrDefault(forwardQ);
+    reluConfig->propLossMath = arithmeticFromQuantizationOrDefault(backwardQ);
+    reluConfig->outputQ = forwardQ;
+    reluConfig->propLossQ = backwardQ;
 }
 
 void reluForwardFloat(tensor_t *input, tensor_t *output) {
@@ -29,11 +32,11 @@ void reluForwardSymInt32(tensor_t *input, tensor_t *output) {
 void reluForward(layer_t *reluLayer, tensor_t *input, tensor_t *output) {
     reluConfig_t *reluConfig = reluLayer->config->relu;
 
-    switch (reluConfig->forwardQ->type) {
-    case FLOAT32:
+    switch (reluConfig->forwardMath.type) {
+    case ARITH_FLOAT32:
         reluForwardFloat(input, output);
         break;
-    case SYM_INT32:
+    case ARITH_SYM_INT32:
         reluForwardSymInt32(input, output);
         break;
     default:
@@ -81,11 +84,36 @@ void reluBackwardSymInt32(tensor_t *forwardInput, tensor_t *loss, tensor_t *prop
 void reluBackward(layer_t *reluLayer, tensor_t *forwardInput, tensor_t *loss, tensor_t *propLoss) {
     reluConfig_t *reluConfig = reluLayer->config->relu;
 
-    switch (reluConfig->backwardQ->type) {
-    case FLOAT32:
+    switch (reluConfig->propLossMath.type) {
+    case ARITH_FLOAT32:
+        /* Relu backward bypasses the executeOp funnel (scale-transparent) and
+         * raw-casts the wire data pointers. The FLOAT32 arm reads/writes
+         * forwardInput/loss/propLoss as float*; fed a SYM_INT32 wire it silently
+         * reads int mantissa codes as floats — garbage grads propagated with no
+         * diagnostic. Guard the actual wire dtypes and fail fast, mirroring the
+         * LayerNorm/GroupNorm backward guards (#315, #261). */
+        if (forwardInput->quantization->type != FLOAT32 || loss->quantization->type != FLOAT32 ||
+            propLoss->quantization->type != FLOAT32) {
+            PRINT_ERROR("ReLU backward: FLOAT32 arm requires FLOAT32 wires — got forwardInput %d, "
+                        "loss %d, propLoss %d",
+                        (int)forwardInput->quantization->type, (int)loss->quantization->type,
+                        (int)propLoss->quantization->type);
+            exit(1);
+        }
         reluBackwardFloat(forwardInput, loss, propLoss);
         break;
-    case SYM_INT32:
+    case ARITH_SYM_INT32:
+        /* The SYM_INT32 arm raw-casts to int32* and derefs loss/propLoss->qConfig
+         * as symInt32QConfig_t*; a FLOAT32 wire carries qConfig == NULL, so the
+         * mismatch is a NULL deref rather than mere garbage — same fail-fast. */
+        if (forwardInput->quantization->type != SYM_INT32 ||
+            loss->quantization->type != SYM_INT32 || propLoss->quantization->type != SYM_INT32) {
+            PRINT_ERROR("ReLU backward: SYM_INT32 arm requires SYM_INT32 wires — got forwardInput "
+                        "%d, loss %d, propLoss %d",
+                        (int)forwardInput->quantization->type, (int)loss->quantization->type,
+                        (int)propLoss->quantization->type);
+            exit(1);
+        }
         reluBackwardSymInt32(forwardInput, loss, propLoss);
         break;
     default:

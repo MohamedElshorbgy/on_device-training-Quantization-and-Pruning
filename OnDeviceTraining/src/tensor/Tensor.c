@@ -41,10 +41,11 @@ size_t calcBytesPerElement(quantization_t *quantization) {
         symQConfig_t *symQC = quantization->qConfig;
         return (size_t)ceilf((float)symQC->qBits / 8.0f);
     }
-    case ASYM:
+    case ASYM: {
         asymQConfig_t *asymQConfig = quantization->qConfig;
         uint32_t qBits = asymQConfig->qBits;
         return ceil((float)qBits / (float)8);
+    }
     case BOOL:
         return 1;
     default:
@@ -65,9 +66,10 @@ size_t calcBitsPerElement(quantization_t *quantization) {
         symQConfig_t *symQC = quantization->qConfig;
         return symQC->qBits;
     }
-    case ASYM:
+    case ASYM: {
         asymQConfig_t *asymQConfig = quantization->qConfig;
         return asymQConfig->qBits;
+    }
     case BOOL:
         return 1;
     default:
@@ -76,15 +78,9 @@ size_t calcBitsPerElement(quantization_t *quantization) {
     }
 }
 
-size_t calcBitsPerTensor(tensor_t *tensor) {
-    size_t bitsPerElement = calcBitsPerElement(tensor->quantization);
-    size_t numElements = calcNumberOfElementsByShape(tensor->shape);
-    return bitsPerElement * numElements;
-}
-
 size_t calcBytesPerTensor(tensor_t *tensor) {
-    size_t bitsPerTensor = calcBitsPerTensor(tensor);
-    return bitsPerTensor / 8;
+    size_t numberOfElements = calcNumberOfElementsByShape(tensor->shape);
+    return calcNumberOfBytesForData(tensor->quantization, numberOfElements);
 }
 
 size_t calcNumberOfBytesForData(quantization_t *q, size_t numberOfElements) {
@@ -97,9 +93,10 @@ size_t calcNumberOfBytesForData(quantization_t *q, size_t numberOfElements) {
         return numberOfElements * sizeof(int32_t);
     case SYM:
         return (calcBitsPerElement(q) * numberOfElements + 7) / 8;
-    case ASYM:
+    case ASYM: {
         size_t bitsPerElement = calcBitsPerElement(q);
         return (bitsPerElement * numberOfElements + 7) / 8;
+    }
     case BOOL:
         return (numberOfElements + 7) / 8;
     default:
@@ -175,12 +172,11 @@ uint8_t writeByte(uint8_t existingData, uint8_t data, uint8_t startbit, uint8_t 
     uint8_t endbitInternal = endbit - (startbit / 8) * 8;
     uint8_t bitmask = getBitmask(startbitInternal, endbitInternal);
     data <<= startbitInternal;
-    // print_binary_uint8(data);
     uint8_t intermediate = data & bitmask;
-    // print_binary_uint8(bitmask);
-    // print_binary_uint8(intermediate);
-    existingData = intermediate | existingData;
-    // print_binary_uint8(existingData);
+    /* Clear-then-set: the [startbit, endbit) range is fully defined by this
+     * write, so callers may target buffers with stale in-range bits (bit-
+     * offset appends); bits outside the mask are preserved. */
+    existingData = (existingData & (uint8_t)~bitmask) | intermediate;
     return existingData;
 }
 
@@ -194,22 +190,32 @@ int min(int a, int b) {
 
 void byteConversion(uint8_t *dataIn, size_t dataInBits, uint8_t *dataOut, size_t dataOutBits,
                     size_t numValues) {
-    memset(dataOut, 0, (numValues * dataOutBits - 1) / 8 + 1);
-    size_t dataOutIndex = 0;
-    size_t dataInIndex = 0;
-    int dataOutStartbit = 0;
-    int dataInStartbit = 0;
-    int dataInEndbit = (int)dataInBits;
-    int dataOutEndbit = (int)dataOutBits;
+    if (numValues == 0) {
+        /* Skip the memset: N=0 tensor data may be NULL (#160). */
+        return;
+    }
+    /* Ceiling idiom (bits+7)/8 as in calcNumberOfBytesForData: identical to
+     * the previous (bits-1)/8+1 for bits > 0, but safely 0 instead of a
+     * size_t underflow for dataOutBits == 0. memset also zeroes the trailing
+     * pad bits of the last byte, which the append loop leaves untouched. */
+    memset(dataOut, 0, (numValues * dataOutBits + 7) / 8);
+    byteConversionAppend(dataIn, dataInBits, dataOut, dataOutBits, numValues, 0, 0);
+}
+
+void byteConversionAppend(uint8_t *dataIn, size_t dataInBits, uint8_t *dataOut, size_t dataOutBits,
+                          size_t numValues, size_t dstStartBit, size_t srcStartBit) {
+    size_t dataOutIndex = dstStartBit / 8;
+    size_t dataInIndex = srcStartBit / 8;
+    int dataOutStartbit = (int)(dstStartBit % 8);
+    int dataInStartbit = (int)(srcStartBit % 8);
+    int dataInEndbit = dataInStartbit + (int)dataInBits;
+    int dataOutEndbit = dataOutStartbit + (int)dataOutBits;
     for (size_t i = 0; i < numValues; i++) {
-        /*
-        printf("\n");
-        printf("\n");
-        printf("Value %i\n", i);*/
         while ((dataInStartbit < dataInEndbit) | (dataOutStartbit < dataOutEndbit)) {
             /* Guard each side: input may exhaust before output (widening) or
-             * output may fill before input (narrowing); skipping the out-of-range
-             * access avoids OOB while preserving zero-fill semantics. */
+             * output may fill before input (narrowing); skipping the
+             * out-of-range access avoids OOB while preserving zero-fill
+             * semantics. */
             uint8_t data = 0;
             if (dataInStartbit < dataInEndbit) {
                 data = readByte(dataIn[dataInIndex], dataInStartbit, dataInEndbit);
@@ -219,33 +225,15 @@ void byteConversion(uint8_t *dataIn, size_t dataInBits, uint8_t *dataOut, size_t
                     writeByte(dataOut[dataOutIndex], data, dataOutStartbit, dataOutEndbit);
             }
 
-            /*
-            printf("dataInStartbit %d\n", dataInStartbit);
-            printf("dataInEndbit %d\n", dataInEndbit);
-            printf("dataOutStartbit %d\n", dataOutStartbit);
-            printf("dataOutEndbit %d\n", dataOutEndbit);
-            printf("dataInIndex %d\n", dataInIndex);
-            printf("dataOutIndex %d\n", dataOutIndex);
-            printf("data");
-            print_binary_uint8(data);
-            printf("dataOut[dataOutIndex]");
-            print_binary_uint8(dataOut[dataOutIndex]);
-            */
             int valuesRead = min(dataInEndbit - dataInStartbit, 8 - dataInStartbit % 8);
             int valuesWritten = min(dataOutEndbit - dataOutStartbit, 8 - dataOutStartbit % 8);
             int minValue = min(valuesRead, valuesWritten);
-
-            /*
-            printf("valuesRead %d\n", valuesRead);
-            printf("valuesWritten %d\n", valuesWritten);
-            printf("minValue %d\n", minValue);*/
 
             uint8_t deltaIn = minValue;
             uint8_t deltaOut = minValue;
             if (dataInStartbit == dataInEndbit) {
                 dataOutStartbit += valuesWritten;
                 deltaOut = valuesWritten;
-
             } else {
                 dataOutStartbit += minValue;
             }
@@ -262,12 +250,11 @@ void byteConversion(uint8_t *dataIn, size_t dataInBits, uint8_t *dataOut, size_t
             if (dataOutStartbit / 8 > (dataOutStartbit - deltaOut) / 8) {
                 dataOutIndex += 1;
             }
-            // printf("\n");
         }
         dataInStartbit = dataInEndbit % 8;
-        dataInEndbit = dataInStartbit + dataInBits;
+        dataInEndbit = dataInStartbit + (int)dataInBits;
         dataOutStartbit = dataOutEndbit % 8;
-        dataOutEndbit = dataOutStartbit + dataOutBits;
+        dataOutEndbit = dataOutStartbit + (int)dataOutBits;
     }
 }
 
@@ -337,7 +324,7 @@ void printTensor(tensor_t *t) {
             printf("%f\n", currentElement);
         }
         break;
-    case SYM_INT32:
+    case SYM_INT32: {
         symInt32QConfig_t *symQC = q->qConfig;
         printf("SYM_INT32 \n");
         printf("scale=%e\n", symQC->scale);
@@ -348,7 +335,8 @@ void printTensor(tensor_t *t) {
             printf("%i\n", currentElement);
         }
         break;
-    case ASYM:
+    }
+    case ASYM: {
         asymQConfig_t *lq = q->qConfig;
         printf("ASYM\n");
         printf("scale=%e\n", lq->scale);
@@ -358,6 +346,7 @@ void printTensor(tensor_t *t) {
             printf("%i\n", t->data[i]);
         }
         break;
+    }
     case BOOL:
         printf("BOOL\n");
         printf("[");
@@ -418,17 +407,39 @@ void copyShape(shape_t *dest, shape_t *src) {
     dest->numberOfDimensions = src->numberOfDimensions;
 }
 
+/* Clones src's quantization into dest. Config-carrying dtypes (SYM_INT32/SYM/ASYM)
+ * copy INTO dest->qConfig -- the caller must have pre-allocated it for the same
+ * dtype (src/tensor never allocates). NULL-config dtypes (INT32/FLOAT32/BOOL)
+ * overwrite dest->qConfig with NULL; a heap config dest owned beforehand stays
+ * owned by the caller. */
+static void copyQConfigInto(quantization_t *dest, quantization_t *src, size_t qConfigSize,
+                            const char *typeName) {
+    if (dest->qConfig == NULL) {
+        PRINT_ERROR("copyQuantization: dest->qConfig for %s must be caller-allocated", typeName);
+        exit(1);
+    }
+    dest->type = src->type;
+    memcpy(dest->qConfig, src->qConfig, qConfigSize);
+}
+
 void copyQuantization(quantization_t *dest, quantization_t *src) {
     switch (src->type) {
+    case INT32:
+        dest->type = INT32;
+        dest->qConfig = NULL;
+        break;
     case FLOAT32:
         dest->type = FLOAT32;
         dest->qConfig = NULL;
         break;
     case SYM_INT32:
-        dest->type = SYM_INT32;
-        symInt32QConfig_t *destQC = dest->qConfig;
-        symInt32QConfig_t *srcQC = src->qConfig;
-        memcpy(destQC, srcQC, sizeof(symInt32QConfig_t));
+        copyQConfigInto(dest, src, sizeof(symInt32QConfig_t), "SYM_INT32");
+        break;
+    case SYM:
+        copyQConfigInto(dest, src, sizeof(symQConfig_t), "SYM");
+        break;
+    case ASYM:
+        copyQConfigInto(dest, src, sizeof(asymQConfig_t), "ASYM");
         break;
     case BOOL:
         dest->type = BOOL;

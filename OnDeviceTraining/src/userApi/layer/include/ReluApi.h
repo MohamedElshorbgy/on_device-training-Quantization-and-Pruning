@@ -4,16 +4,17 @@
 #include "Layer.h"
 #include "LayerQuant.h"
 
-/* Legacy (pre-2026-05-15 factory API) — retained during PR 1/2 coexistence window. */
-layer_t *reluLayerInitLegacy(quantization_t *forwardQ, quantization_t *backwardQ);
-void freeReluLayerLegacy(layer_t *reluLayer);
-
-/*! Borrowing variant — stores lq->forwardMath and lq->backwardMath as the
- *  layer's forwardQ / backwardQ pointers. Caller retains ownership of lq. */
+/*! Borrowing variant — stores lq->outputQ and lq->propLossQ as the
+ *  layer's outputQ / propLossQ pointers. Caller retains ownership of lq.
+ *  Use when: the quantizations are shared/long-lived (e.g. reused across
+ *  several layers) and the caller manages their lifetime — they must
+ *  outlive the layer. */
 layer_t *reluLayerInit(layerQuant_t *lq);
 
-/*! Owning variant — deep-copies lq->forwardMath and lq->backwardMath.
- *  Caller can drop lq + quantizations immediately. */
+/*! Owning variant — deep-copies lq->outputQ and lq->propLossQ.
+ *  Caller can drop lq + quantizations immediately.
+ *  Use when: the quantizations are stack-locals or one-off configs and you
+ *  want fire-and-forget teardown (freeReluLayer tears them down too). */
 layer_t *reluLayerInitOwning(layerQuant_t *lq);
 
 /*! Tears down the layer. Reads config->ownsQuantizations to decide whether

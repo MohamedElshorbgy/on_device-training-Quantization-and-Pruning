@@ -5,6 +5,7 @@
 
 #include "AdaptiveAvgPool1d.h"
 #include "AdaptivePool1dApi.h"
+#include "ArithmeticType.h"
 #include "Common.h"
 #include "Layer.h"
 #include "LayerQuant.h"
@@ -27,12 +28,12 @@ static void validateLayerQuant(layerQuant_t *lq) {
         PRINT_ERROR("adaptiveAvgPool1dLayerInit: lq pointer is NULL");
         exit(1);
     }
-    if (lq->forwardMath == NULL) {
-        PRINT_ERROR("adaptiveAvgPool1dLayerInit: layerQuant.forwardMath must be set");
+    if (lq->outputQ == NULL) {
+        PRINT_ERROR("adaptiveAvgPool1dLayerInit: layerQuant.outputQ must be set");
         exit(1);
     }
-    if (lq->backwardMath == NULL) {
-        PRINT_ERROR("adaptiveAvgPool1dLayerInit: layerQuant.backwardMath must be set");
+    if (lq->propLossQ == NULL) {
+        PRINT_ERROR("adaptiveAvgPool1dLayerInit: layerQuant.propLossQ must be set");
         exit(1);
     }
 }
@@ -55,8 +56,10 @@ layer_t *adaptiveAvgPool1dLayerInit(adaptiveAvgPool1dInit_t *init, layerQuant_t 
 
     layer_t *layer = buildSkeleton(init);
     adaptiveAvgPool1dConfig_t *cfg = layer->config->adaptiveAvgPool1d;
-    cfg->forwardQ = lq->forwardMath;
-    cfg->propLossQ = lq->backwardMath;
+    cfg->forwardMath = lq->forwardMath;
+    cfg->propLossMath = lq->propLossMath;
+    cfg->outputQ = lq->outputQ;
+    cfg->propLossQ = lq->propLossQ;
     cfg->ownsQuantizations = false;
     return layer;
 }
@@ -67,8 +70,10 @@ layer_t *adaptiveAvgPool1dLayerInitOwning(adaptiveAvgPool1dInit_t *init, layerQu
 
     layer_t *layer = buildSkeleton(init);
     adaptiveAvgPool1dConfig_t *cfg = layer->config->adaptiveAvgPool1d;
-    cfg->forwardQ = deepCopyQuantization(lq->forwardMath);
-    cfg->propLossQ = deepCopyQuantization(lq->backwardMath);
+    cfg->forwardMath = lq->forwardMath;
+    cfg->propLossMath = lq->propLossMath;
+    cfg->outputQ = deepCopyQuantization(lq->outputQ);
+    cfg->propLossQ = deepCopyQuantization(lq->propLossQ);
     cfg->ownsQuantizations = true;
     return layer;
 }
@@ -80,11 +85,11 @@ void freeAdaptiveAvgPool1dLayer(layer_t *layer) {
     adaptiveAvgPool1dConfig_t *cfg = layer->config->adaptiveAvgPool1d;
 
     if (cfg->ownsQuantizations) {
-        if (cfg->forwardQ != NULL) {
-            freeReservedMemory(cfg->forwardQ->qConfig);
-            freeReservedMemory(cfg->forwardQ);
+        if (cfg->outputQ != NULL) {
+            freeReservedMemory(cfg->outputQ->qConfig);
+            freeReservedMemory(cfg->outputQ);
         }
-        if (cfg->propLossQ != NULL && cfg->propLossQ != cfg->forwardQ) {
+        if (cfg->propLossQ != NULL && cfg->propLossQ != cfg->outputQ) {
             freeReservedMemory(cfg->propLossQ->qConfig);
             freeReservedMemory(cfg->propLossQ);
         }

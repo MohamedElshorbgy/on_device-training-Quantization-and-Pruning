@@ -33,6 +33,7 @@ add_elastic_ai_unit_test(
         QuantizationApi
         Arithmetic
         StorageApi
+        odt_test_death
 )
 
 add_elastic_ai_unit_test(
@@ -41,6 +42,26 @@ add_elastic_ai_unit_test(
         MORE_LIBS
         Tensor
         Quantization
+)
+
+add_elastic_ai_unit_test(
+        LIB_UNDER_TEST
+        ArithmeticType
+        MORE_LIBS
+        Quantization
+        Rounding
+        Common
+)
+
+add_elastic_ai_unit_test(
+        LIB_UNDER_TEST
+        Axpby
+        MORE_LIBS
+        Tensor
+        TensorApi
+        QuantizationApi
+        StorageApi
+        odt_test_death
 )
 
 add_elastic_ai_unit_test(
@@ -59,6 +80,11 @@ add_elastic_ai_unit_test(
         MinMax
         RNG
         Common
+        TensorApi
+        QuantizationApi
+        StorageApi
+        Tensor
+        odt_test_death
 )
 
 add_elastic_ai_unit_test(
@@ -67,6 +93,20 @@ add_elastic_ai_unit_test(
         MORE_LIBS
         Arithmetic
         Tensor
+)
+
+add_elastic_ai_unit_test(
+        LIB_UNDER_TEST
+        JacobiEig
+        MORE_LIBS
+        m
+        Tensor
+        TensorApi
+        QuantizationApi
+        StorageApi
+        Reduce
+        MinMax
+        odt_test_death
 )
 
 add_elastic_ai_unit_test(
@@ -83,6 +123,7 @@ add_elastic_ai_unit_test(
         MORE_LIBS
         Arithmetic
         Tensor
+        odt_test_death
 )
 
 add_elastic_ai_unit_test(
@@ -91,6 +132,31 @@ add_elastic_ai_unit_test(
         MORE_LIBS
         Arithmetic
         Tensor
+)
+
+add_elastic_ai_unit_test(
+        LIB_UNDER_TEST
+        Reduce
+        MORE_LIBS
+        m
+        Tensor
+        TensorApi
+        QuantizationApi
+        Arithmetic
+        StorageApi
+        MinMax
+        odt_test_death
+)
+
+add_elastic_ai_unit_test(
+        LIB_UNDER_TEST
+        RowBroadcast
+        MORE_LIBS
+        Tensor
+        TensorApi
+        QuantizationApi
+        StorageApi
+        odt_test_death
 )
 
 add_elastic_ai_unit_test(
@@ -154,3 +220,45 @@ add_elastic_ai_unit_test(
 )
 add_dependencies(UnitTestConvTranspose1dKernel generate_expected_conv_transpose_1d_kernel)
 target_include_directories(UnitTestConvTranspose1dKernel PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+add_elastic_ai_unit_test(
+        LIB_UNDER_TEST
+        ExecuteOp
+        MORE_LIBS
+        Tensor
+        TensorApi
+        TensorConversion
+        Quantization
+        QuantizationApi
+        Add
+        Arithmetic
+        ArithmeticType
+        Rounding
+        RNG
+        StorageApi
+        Common
+        odt_test_death
+)
+
+set(GEN_POINTWISE_FUSED_HEADER ${CMAKE_CURRENT_BINARY_DIR}/expected_pointwise_fused.h)
+add_custom_command(
+        OUTPUT ${GEN_POINTWISE_FUSED_HEADER}
+        COMMAND uv run ${CMAKE_CURRENT_SOURCE_DIR}/generate_expected_pointwise_fused.py
+                --out ${GEN_POINTWISE_FUSED_HEADER}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/generate_expected_pointwise_fused.py
+        COMMENT "Generating expected_pointwise_fused.h via PyTorch"
+        VERBATIM
+)
+add_custom_target(generate_expected_pointwise_fused
+        DEPENDS ${GEN_POINTWISE_FUSED_HEADER})
+
+add_elastic_ai_unit_test(
+        LIB_UNDER_TEST
+        PointwiseFused
+        MORE_LIBS
+        Tensor
+        Common
+        odt_test_death
+)
+add_dependencies(UnitTestPointwiseFused generate_expected_pointwise_fused)
+target_include_directories(UnitTestPointwiseFused PRIVATE ${CMAKE_CURRENT_BINARY_DIR})

@@ -17,11 +17,17 @@ typedef struct adaptiveAvgPool1dInit {
     size_t outputSize; /* REQUIRED, >= 1 */
 } adaptiveAvgPool1dInit_t;
 
-/*! Borrowing variant — stores lq->forwardMath in forwardQ and lq->backwardMath
- *  in propLossQ (ownsQuantizations = false). */
+/*! Borrowing variant — stores lq->outputQ in outputQ and lq->propLossQ
+ *  in propLossQ verbatim (ownsQuantizations = false).
+ *  Use when: outputQ/propLossQ are shared/long-lived (e.g. reused across
+ *  several layers) and the caller manages their lifetime — they must
+ *  outlive the layer. */
 layer_t *adaptiveAvgPool1dLayerInit(adaptiveAvgPool1dInit_t *init, layerQuant_t *lq);
 
-/*! Owning variant — deep-copies forwardMath / backwardMath (ownsQuantizations = true). */
+/*! Owning variant — deep-copies outputQ / propLossQ (ownsQuantizations = true).
+ *  Use when: outputQ/propLossQ are stack-locals or one-off configs and you
+ *  want fire-and-forget teardown (freeAdaptiveAvgPool1dLayer tears them down
+ *  too). */
 layer_t *adaptiveAvgPool1dLayerInitOwning(adaptiveAvgPool1dInit_t *init, layerQuant_t *lq);
 
 /*! Tears down everything the factory allocated; frees the two math quantizations

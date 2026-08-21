@@ -4,6 +4,10 @@ target_link_libraries(Conv1d PRIVATE
         DTypes
         Tensor
         Arithmetic
+        ArithmeticType
+        ExecuteOp
+        Mul
+        Quantization
         Common
         Kernel
         SlidingWindow1d
@@ -17,6 +21,10 @@ target_link_libraries(Conv1dTransposed PRIVATE
         DTypes
         Tensor
         Arithmetic
+        ArithmeticType
+        ExecuteOp
+        Mul
+        Quantization
         Common
         Kernel
         SlidingWindow1d
@@ -30,6 +38,8 @@ target_link_libraries(MaxPool1d PRIVATE
         DTypes
         Tensor
         Arithmetic
+        ArithmeticType
+        ExecuteOp
         Common
         Kernel
         SlidingWindow1d
@@ -41,6 +51,8 @@ target_link_libraries(AvgPool1d PRIVATE
         DTypes
         Tensor
         Arithmetic
+        ArithmeticType
+        ExecuteOp
         Common
         Kernel
         SlidingWindow1d
@@ -51,6 +63,8 @@ target_include_directories(AdaptiveAvgPool1d PUBLIC include)
 target_link_libraries(AdaptiveAvgPool1d PRIVATE
         DTypes
         Tensor
+        ArithmeticType
+        ExecuteOp
         Common
         AdaptiveWindow1d
 )
@@ -61,6 +75,7 @@ target_link_libraries(Dropout PRIVATE
         DTypes
         Tensor
         Layer
+        ArithmeticType
         Common
         Bernoulli
         Rounding
@@ -74,7 +89,32 @@ target_link_libraries(LayerNorm PRIVATE
         TensorConversion
         Quantization
         Add
+        Sub
+        Mul
+        Reduce
         Arithmetic
+        ArithmeticType
+        ExecuteOp
+        Rounding
+        Layer
+        Common
+)
+
+add_library(GroupNorm GroupNorm.c)
+target_include_directories(GroupNorm PUBLIC include)
+target_link_libraries(GroupNorm PRIVATE
+        DTypes
+        Tensor
+        Quantization
+        Add
+        Sub
+        Mul
+        Div
+        MinMax
+        Reduce
+        Arithmetic
+        ArithmeticType
+        ExecuteOp
         Rounding
         Layer
         Common
@@ -86,6 +126,9 @@ target_link_libraries(Layer PRIVATE
         DTypes
         Tensor
         Arithmetic
+        ArithmeticType
+        Common
+        ExecuteOp
         Linear
         Relu
         Conv1d
@@ -98,6 +141,7 @@ target_link_libraries(Layer PRIVATE
         QuantizationLayer
         Dropout
         LayerNorm
+        GroupNorm
 )
 
 add_library(Linear Linear.c)
@@ -106,6 +150,8 @@ target_link_libraries(Linear PRIVATE
         DTypes
         Tensor
         Arithmetic
+        ArithmeticType
+        ExecuteOp
         Quantization
         TensorConversion
         Layer
@@ -117,9 +163,10 @@ target_include_directories(QuantizationLayer PUBLIC include)
 target_link_libraries(QuantizationLayer PRIVATE
         Common
         Quantization
+        ArithmeticType
         Rounding
         Tensor
-        TensorConversion
+        ExecuteOp
 )
 
 add_library(Relu Relu.c)
@@ -128,6 +175,7 @@ target_link_libraries(Relu PRIVATE
         DTypes
         Tensor
         Arithmetic
+        ArithmeticType
         Comparison
         Layer
         Common
@@ -139,6 +187,8 @@ target_link_libraries(Softmax PRIVATE
         DTypes
         Tensor
         Arithmetic
+        ArithmeticType
+        ExecuteOp
         Layer
         Common
 )
@@ -168,8 +218,10 @@ target_link_libraries(CommonLayerLibs INTERFACE
         QuantizationLayer
         Dropout
         LayerNorm
+        GroupNorm
         Rounding
         Tensor
         Sgd
+        Common
 )
 

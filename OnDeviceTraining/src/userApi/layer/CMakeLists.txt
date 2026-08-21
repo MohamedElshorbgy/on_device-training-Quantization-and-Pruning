@@ -1,6 +1,7 @@
 add_library(Conv1dApi Conv1dApi.c)
 target_include_directories(Conv1dApi PUBLIC include)
 target_link_libraries(Conv1dApi PRIVATE
+        ArithmeticType
         Common
         Conv1d
         Distributions
@@ -19,6 +20,7 @@ target_link_libraries(Conv1dApi PRIVATE
 add_library(LinearApi LinearApi.c)
 target_include_directories(LinearApi PUBLIC include)
 target_link_libraries(LinearApi PRIVATE
+        ArithmeticType
         Tensor
         TensorApi
         QuantizationApi
@@ -35,6 +37,7 @@ target_link_libraries(LinearApi PRIVATE
 add_library(ReluApi ReluApi.c)
 target_include_directories(ReluApi PUBLIC include)
 target_link_libraries(ReluApi PRIVATE
+        ArithmeticType
         Tensor
         Rounding
         Layer
@@ -48,6 +51,7 @@ target_link_libraries(ReluApi PRIVATE
 add_library(SoftmaxApi SoftmaxApi.c)
 target_include_directories(SoftmaxApi PUBLIC include)
 target_link_libraries(SoftmaxApi PRIVATE
+        ArithmeticType
         Common
         Layer
         LayerQuant
@@ -71,6 +75,7 @@ target_link_libraries(FlattenApi PRIVATE
 add_library(Conv1dTransposedApi Conv1dTransposedApi.c)
 target_include_directories(Conv1dTransposedApi PUBLIC include)
 target_link_libraries(Conv1dTransposedApi PRIVATE
+        ArithmeticType
         Common
         Conv1dTransposed
         Distributions
@@ -89,6 +94,7 @@ target_link_libraries(Conv1dTransposedApi PRIVATE
 add_library(Pool1dApi Pool1dApi.c)
 target_include_directories(Pool1dApi PUBLIC include)
 target_link_libraries(Pool1dApi PRIVATE
+        ArithmeticType
         AvgPool1d
         Common
         Kernel
@@ -107,6 +113,7 @@ add_library(AdaptivePool1dApi AdaptivePool1dApi.c)
 target_include_directories(AdaptivePool1dApi PUBLIC include)
 target_link_libraries(AdaptivePool1dApi PRIVATE
         AdaptiveAvgPool1d
+        ArithmeticType
         Common
         Layer
         LayerQuant
@@ -122,6 +129,7 @@ target_link_libraries(DropoutApi PRIVATE
         Tensor
         Layer
         Dropout
+        ArithmeticType
         Common
         Rounding
         StorageApi
@@ -130,12 +138,28 @@ target_link_libraries(DropoutApi PRIVATE
 add_library(LayerNormApi LayerNormApi.c)
 target_include_directories(LayerNormApi PUBLIC include)
 target_link_libraries(LayerNormApi PRIVATE
+        ArithmeticType
         Tensor
         TensorApi
         QuantizationApi
         Rounding
         Layer
         LayerNorm
+        LayerQuant
+        Common
+        StorageApi
+)
+
+add_library(GroupNormApi GroupNormApi.c)
+target_include_directories(GroupNormApi PUBLIC include)
+target_link_libraries(GroupNormApi PRIVATE
+        ArithmeticType
+        Tensor
+        TensorApi
+        QuantizationApi
+        Rounding
+        Layer
+        GroupNorm
         LayerQuant
         Common
         StorageApi

@@ -3,10 +3,10 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#include "ArithmeticType.h"
 #include "Common.h"
 #include "Conv1dTransposed.h"
 #include "Conv1dTransposedApi.h"
-#include "Distributions.h"
 #include "Kernel.h"
 #include "Layer.h"
 #include "LayerCommon.h"
@@ -44,6 +44,7 @@ static shape_t *buildOwnedShape(const size_t *srcDims, size_t numberOfDims) {
 
 static parameter_t *allocateConv1dTransposedWeights(size_t inChannels, size_t outChannels,
                                                     size_t groups, size_t kernelSize,
+                                                    weightInit_t weightInit,
                                                     quantization_t *storageQ,
                                                     quantization_t *gradQ) {
     /* Conv1dTransposed weight shape: [inChannels, outChannels/groups, kernelSize].
@@ -65,25 +66,24 @@ static parameter_t *allocateConv1dTransposedWeights(size_t inChannels, size_t ou
     shape_t *shape = buildOwnedShape((size_t[]){inChannels, outPerGroup, kernelSize}, 3);
     tensor_t *paramTensor = initTensor(shape, getQLike(storageQ), NULL);
 
-    if (storageQ->type != FLOAT32) {
-        PRINT_ERROR("conv1dTransposedLayerInit: KAIMING_UNIFORM init currently requires FLOAT32 "
-                    "weight storage (Issue C will lift this limit)");
-        exit(1);
-    }
-    distribution_t dist = {
-        .type = KAIMING_UNIFORM,
-        .params.kaiming = {.gain = 1.4142135623730951f, .fanMode = outPerGroup * kernelSize},
-    };
-    initDistribution(paramTensor, &dist);
+    /* ConvTranspose weight layout [inChannels, outPerGroup, kernelSize]:
+     * PyTorch fan_in = weight.size(1)*k = outPerGroup*kernelSize,
+     *         fan_out = weight.size(0)*k = inChannels*kernelSize. */
+    size_t fanIn = outPerGroup * kernelSize;
+    size_t fanOut = inChannels * kernelSize;
+    initWeightTensor(paramTensor, weightInit, fanIn, fanOut);
 
     tensor_t *gradTensor = gradInit(paramTensor, gradQ, NULL);
     return parameterInit(paramTensor, gradTensor);
 }
 
-static parameter_t *allocateConv1dTransposedBias(size_t outChannels, quantization_t *storageQ,
-                                                 quantization_t *gradQ) {
+static parameter_t *allocateConv1dTransposedBias(size_t outChannels, size_t fanIn,
+                                                 quantization_t *storageQ, quantization_t *gradQ) {
+    /* PyTorch draws bias from uniform(+/- 1/sqrt(fan_in)) using the WEIGHT's
+     * fan_in (= outPerGroup*kernelSize). */
     shape_t *shape = buildOwnedShape((size_t[]){outChannels}, 1);
     tensor_t *paramTensor = initTensor(shape, getQLike(storageQ), NULL);
+    initBiasTensor(paramTensor, fanIn);
     tensor_t *gradTensor = gradInit(paramTensor, gradQ, NULL);
     return parameterInit(paramTensor, gradTensor);
 }
@@ -112,12 +112,12 @@ static void validateLayerQuantForConv1dTransposed(layerQuant_t *lq, bool hasBias
         PRINT_ERROR("conv1dTransposedLayerInit: lq pointer is NULL");
         exit(1);
     }
-    if (lq->forwardMath == NULL) {
-        PRINT_ERROR("conv1dTransposedLayerInit: layerQuant.forwardMath must be set");
+    if (lq->outputQ == NULL) {
+        PRINT_ERROR("conv1dTransposedLayerInit: layerQuant.outputQ must be set");
         exit(1);
     }
-    if (lq->backwardMath == NULL) {
-        PRINT_ERROR("conv1dTransposedLayerInit: layerQuant.backwardMath must be set");
+    if (lq->propLossQ == NULL) {
+        PRINT_ERROR("conv1dTransposedLayerInit: layerQuant.propLossQ must be set");
         exit(1);
     }
     if (lq->weightStorage == NULL) {
@@ -150,12 +150,21 @@ static layer_t *buildConv1dTransposedLayerSkeleton(conv1dTransposedInit_t *init,
     layer->config = layerCfg;
 
     cfg->kernel = buildConv1dTransposedKernel(init);
-    quantization_t *gradQ = quantizationInitFloat(); /* Conv1dTransposed backward is FLOAT32-only */
+    size_t fanIn = (init->outChannels / groups) * init->kernelSize;
+    /* Grad storage knob (#261): Conv1dTransposed backward is FLOAT32-only, so a
+     * NULL knob keeps the hard-pinned FLOAT32 default; a non-NULL
+     * weightGradStorage/biasGradStorage overrides it explicitly. */
+    quantization_t *floatGradQ = quantizationInitFloat();
+    quantization_t *weightGradQ =
+        lq->weightGradStorage != NULL ? lq->weightGradStorage : floatGradQ;
+    quantization_t *biasGradQ = lq->biasGradStorage != NULL ? lq->biasGradStorage : floatGradQ;
     cfg->weights = allocateConv1dTransposedWeights(init->inChannels, init->outChannels, groups,
-                                                   init->kernelSize, lq->weightStorage, gradQ);
+                                                   init->kernelSize, init->weightInit,
+                                                   lq->weightStorage, weightGradQ);
     cfg->bias =
-        hasBias ? allocateConv1dTransposedBias(init->outChannels, lq->biasStorage, gradQ) : NULL;
-    freeQuantization(gradQ);
+        hasBias ? allocateConv1dTransposedBias(init->outChannels, fanIn, lq->biasStorage, biasGradQ)
+                : NULL;
+    freeQuantization(floatGradQ);
     cfg->groups = groups;
     cfg->outputPadding = init->outputPadding;
     return layer;
@@ -170,10 +179,17 @@ layer_t *conv1dTransposedLayerInit(conv1dTransposedInit_t *init, layerQuant_t *l
 
     layer_t *layer = buildConv1dTransposedLayerSkeleton(init, lq, hasBias, groups);
     conv1dTransposedConfig_t *cfg = layer->config->conv1dTransposed;
-    cfg->forwardQ = lq->forwardMath;
-    cfg->weightGradQ = lq->backwardMath;
-    cfg->biasGradQ = lq->backwardMath;
-    cfg->propLossQ = lq->backwardMath;
+
+    /* Borrowing: store the forward-wire/dx-wire storage configs verbatim, no copy.
+     * Arithmetic slots are plain by-value copies of the profile's declared math. */
+    cfg->forwardMath = lq->forwardMath;
+    cfg->weightGradMath = lq->weightGradMath;
+    cfg->biasGradMath = lq->biasGradMath;
+    cfg->propLossMath = lq->propLossMath;
+    cfg->outputQ = lq->outputQ;
+    cfg->propLossQ = lq->propLossQ;
+    cfg->weightGradAccMode = lq->weightGradAccMode;
+    cfg->biasGradAccMode = lq->biasGradAccMode;
     cfg->ownsQuantizations = false;
     return layer;
 }
@@ -188,10 +204,16 @@ layer_t *conv1dTransposedLayerInitOwning(conv1dTransposedInit_t *init, layerQuan
     layer_t *layer = buildConv1dTransposedLayerSkeleton(init, lq, hasBias, groups);
     conv1dTransposedConfig_t *cfg = layer->config->conv1dTransposed;
 
-    cfg->forwardQ = deepCopyQuantization(lq->forwardMath);
-    cfg->weightGradQ = deepCopyQuantization(lq->backwardMath);
-    cfg->biasGradQ = deepCopyQuantization(lq->backwardMath);
-    cfg->propLossQ = deepCopyQuantization(lq->backwardMath);
+    /* Owning: same arithmetic as Borrowing; deep-copy the two storage configs
+     * (outputQ, propLossQ) into fresh allocations — 2 allocs, not 4. */
+    cfg->forwardMath = lq->forwardMath;
+    cfg->weightGradMath = lq->weightGradMath;
+    cfg->biasGradMath = lq->biasGradMath;
+    cfg->propLossMath = lq->propLossMath;
+    cfg->outputQ = deepCopyQuantization(lq->outputQ);
+    cfg->propLossQ = deepCopyQuantization(lq->propLossQ);
+    cfg->weightGradAccMode = lq->weightGradAccMode;
+    cfg->biasGradAccMode = lq->biasGradAccMode;
     cfg->ownsQuantizations = true;
     return layer;
 }
@@ -211,21 +233,11 @@ void freeConv1dTransposedLayer(layer_t *layer) {
     freeReservedMemory(cfg->kernel);
 
     if (cfg->ownsQuantizations) {
-        if (cfg->forwardQ != NULL) {
-            freeReservedMemory(cfg->forwardQ->qConfig);
-            freeReservedMemory(cfg->forwardQ);
+        if (cfg->outputQ != NULL) {
+            freeReservedMemory(cfg->outputQ->qConfig);
+            freeReservedMemory(cfg->outputQ);
         }
-        if (cfg->weightGradQ != NULL && cfg->weightGradQ != cfg->forwardQ) {
-            freeReservedMemory(cfg->weightGradQ->qConfig);
-            freeReservedMemory(cfg->weightGradQ);
-        }
-        if (cfg->biasGradQ != NULL && cfg->biasGradQ != cfg->forwardQ &&
-            cfg->biasGradQ != cfg->weightGradQ) {
-            freeReservedMemory(cfg->biasGradQ->qConfig);
-            freeReservedMemory(cfg->biasGradQ);
-        }
-        if (cfg->propLossQ != NULL && cfg->propLossQ != cfg->forwardQ &&
-            cfg->propLossQ != cfg->weightGradQ && cfg->propLossQ != cfg->biasGradQ) {
+        if (cfg->propLossQ != NULL && cfg->propLossQ != cfg->outputQ) {
             freeReservedMemory(cfg->propLossQ->qConfig);
             freeReservedMemory(cfg->propLossQ);
         }

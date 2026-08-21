@@ -1,10 +1,15 @@
 #include "CrossEntropy.h"
+#include "LayerQuant.h"
 #include "QuantizationApi.h"
 #include "Softmax.h"
 #include "SoftmaxApi.h"
 #include "TensorApi.h"
+#include "TensorConversion.h"
+#include "expected_cross_entropy_sym.h"
 #include "unity.h"
 #include <math.h>
+#include <stdint.h>
+#include <string.h>
 
 void unitTestCrossEntropySoftmaxBackward() {
     size_t inputSize = 3;
@@ -33,7 +38,9 @@ void unitTestCrossEntropySoftmaxBackward() {
                     &softmaxOutputQ, NULL);
 
     quantization_t *floatQ = quantizationInitFloat();
-    layer_t *softmaxLayer = softmaxLayerInitLegacy(floatQ, floatQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, floatQ);
+    layer_t *softmaxLayer = softmaxLayerInit(&lq);
     layerFunctions_t softmaxFns = layerFunctions[SOFTMAX];
     softmaxFns.forward(softmaxLayer, &logits, &softmaxOutput);
 
@@ -70,7 +77,7 @@ void unitTestCrossEntropySoftmaxBackward() {
     }
 
     /* FREE. */
-    freeSoftmaxLayerLegacy(softmaxLayer);
+    freeSoftmaxLayer(softmaxLayer);
     freeQuantization(floatQ);
 
     /* ASSERT: raw per-element gradient (p-y), no batch divisor. */
@@ -138,7 +145,9 @@ void testCrossEntropyForward_SumReturnsRawSum() {
     setTensorValues(&softmaxOutput, (uint8_t *)outputData, &outputShape, &outputQ, NULL);
 
     quantization_t *floatQ = quantizationInitFloat();
-    layer_t *softmaxLayer = softmaxLayerInitLegacy(floatQ, floatQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, floatQ);
+    layer_t *softmaxLayer = softmaxLayerInit(&lq);
     layerFunctions_t softmaxFns = layerFunctions[SOFTMAX];
     softmaxFns.forward(softmaxLayer, &logits, &softmaxOutput);
 
@@ -154,7 +163,7 @@ void testCrossEntropyForward_SumReturnsRawSum() {
 
     float capturedActual = crossEntropyForwardFloat(&softmaxOutput, &distribution, REDUCTION_SUM);
 
-    freeSoftmaxLayerLegacy(softmaxLayer);
+    freeSoftmaxLayer(softmaxLayer);
     freeQuantization(floatQ);
 
     /* SUM: same as the pre-existing forward value (raw -log probability sum). */
@@ -251,6 +260,130 @@ void testCrossEntropyForward_DispatcherFloat32MatchesFloatImpl() {
     TEST_ASSERT_FLOAT_WITHIN(1e-5f, (-logf(0.6f) - logf(0.7f)) / 2.0f, viaDispatcher);
 }
 
+/* ---- SYM_INT32 fake-quant arms (#206, M5) ---- */
+
+typedef struct symStackTensor {
+    tensor_t tensor;
+    quantization_t q;
+    symInt32QConfig_t qc;
+} symStackTensor_t;
+
+/* Quantize a FLOAT32 stack tensor into caller-provided SYM_INT32 storage
+ * (int12 default width, HALF_AWAY) — the MSE SYM test pattern. The gold
+ * fixtures are dequant-round-trip-stable, so this lands on exactly the
+ * generator's mantissas + scale. */
+static void makeSymFromFloat(symStackTensor_t *st, uint8_t *storage, tensor_t *floatSrc) {
+    initSymInt32QConfig(HALF_AWAY, &st->qc);
+    initSymInt32Quantization(&st->qc, &st->q);
+    setTensorValuesForConversion(storage, &st->q, floatSrc, &st->tensor);
+    convertTensor(floatSrc, &st->tensor);
+}
+
+static void makeFloatStack(tensor_t *t, float *data, shape_t *shape, quantization_t *q) {
+    initFloat32Quantization(q);
+    setTensorValues(t, (uint8_t *)data, shape, q, NULL);
+}
+
+void testCrossEntropyForwardSymInt32MatchesGold(void) {
+    size_t dims[] = {1, 3};
+    size_t order[] = {0, 1};
+    shape_t shape;
+    setShape(&shape, dims, 2, order);
+
+    float pData[3];
+    memcpy(pData, softmaxOutput_ceSym_symBasic, sizeof(pData));
+    tensor_t pFloat;
+    quantization_t pFloatQ;
+    makeFloatStack(&pFloat, pData, &shape, &pFloatQ);
+
+    symStackTensor_t pSym;
+    uint8_t pSymData[3 * sizeof(int32_t)];
+    makeSymFromFloat(&pSym, pSymData, &pFloat);
+
+    float yData[3];
+    memcpy(yData, label_ceSym_symBasic, sizeof(yData));
+    tensor_t label;
+    quantization_t labelQ;
+    makeFloatStack(&label, yData, &shape, &labelQ);
+
+    float lossSum = crossEntropyForward(&pSym.tensor, &label, REDUCTION_SUM);
+
+    TEST_ASSERT_FLOAT_WITHIN(lossTol_ceSym_symBasic, expectedLossSum_ceSym_symBasic, lossSum);
+}
+
+void testCrossEntropyForwardSymMicrobatchMeanDivides(void) {
+    size_t dims[] = {2, 3};
+    size_t order[] = {0, 1};
+    shape_t shape;
+    setShape(&shape, dims, 2, order);
+
+    float pData[6];
+    memcpy(pData, softmaxOutput_ceSym_symMicrobatch, sizeof(pData));
+    tensor_t pFloat;
+    quantization_t pFloatQ;
+    makeFloatStack(&pFloat, pData, &shape, &pFloatQ);
+
+    symStackTensor_t pSym;
+    uint8_t pSymData[6 * sizeof(int32_t)];
+    makeSymFromFloat(&pSym, pSymData, &pFloat);
+
+    float yData[6];
+    memcpy(yData, label_ceSym_symMicrobatch, sizeof(yData));
+    tensor_t label;
+    quantization_t labelQ;
+    makeFloatStack(&label, yData, &shape, &labelQ);
+
+    float lossMean = crossEntropyForward(&pSym.tensor, &label, REDUCTION_MEAN);
+
+    TEST_ASSERT_FLOAT_WITHIN(lossTol_ceSym_symMicrobatch, expectedLossMean_ceSym_symMicrobatch,
+                             lossMean);
+}
+
+void testCrossEntropySoftmaxBackwardSymWritesRequantizedGrad(void) {
+    size_t dims[] = {2, 3};
+    size_t order[] = {0, 1};
+    shape_t shape;
+    setShape(&shape, dims, 2, order);
+
+    float pData[6];
+    memcpy(pData, softmaxOutput_ceSym_symMicrobatch, sizeof(pData));
+    tensor_t pFloat;
+    quantization_t pFloatQ;
+    makeFloatStack(&pFloat, pData, &shape, &pFloatQ);
+
+    symStackTensor_t pSym;
+    uint8_t pSymData[6 * sizeof(int32_t)];
+    makeSymFromFloat(&pSym, pSymData, &pFloat);
+
+    float yData[6];
+    memcpy(yData, label_ceSym_symMicrobatch, sizeof(yData));
+    tensor_t label;
+    quantization_t labelQ;
+    makeFloatStack(&label, yData, &shape, &labelQ);
+
+    /* SYM result wire (the loss-grad seed inherits the model output's dtype,
+     * CalculateGradsSequential initGradTensor(..., NULL)) — its own int12
+     * HALF_AWAY config; the backward requantizes (p-y) into it. */
+    symStackTensor_t grad;
+    int32_t gradData[6] = {0};
+    initSymInt32QConfig(HALF_AWAY, &grad.qc);
+    initSymInt32Quantization(&grad.qc, &grad.q);
+    setTensorValues(&grad.tensor, (uint8_t *)gradData, &shape, &grad.q, NULL);
+
+    crossEntropySoftmaxBackward(&pSym.tensor, &label, &grad.tensor);
+
+    float scale = grad.qc.scale;
+    TEST_ASSERT_FLOAT_WITHIN(expectedGradScale_ceSym_symMicrobatch * scaleTol_ceSym_symMicrobatch,
+                             expectedGradScale_ceSym_symMicrobatch, scale);
+    for (size_t i = 0; i < expectedGradMantissas_ceSym_symMicrobatch_len; i++) {
+        TEST_ASSERT_INT_WITHIN(mantissaTol_ceSym_symMicrobatch,
+                               expectedGradMantissas_ceSym_symMicrobatch[i], gradData[i]);
+        TEST_ASSERT_FLOAT_WITHIN(gradDequantTol_ceSym_symMicrobatch,
+                                 expectedGradDequant_ceSym_symMicrobatch[i],
+                                 (float)gradData[i] * scale);
+    }
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -262,5 +395,8 @@ int main() {
     RUN_TEST(testCrossEntropyForward_MeanDividesByMicrobatch);
     RUN_TEST(testCrossEntropyForward_Mean1DTensorReturnsSum);
     RUN_TEST(testCrossEntropyForward_DispatcherFloat32MatchesFloatImpl);
+    RUN_TEST(testCrossEntropyForwardSymInt32MatchesGold);
+    RUN_TEST(testCrossEntropyForwardSymMicrobatchMeanDivides);
+    RUN_TEST(testCrossEntropySoftmaxBackwardSymWritesRequantizedGrad);
     return UNITY_END();
 }

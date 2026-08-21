@@ -1,10 +1,12 @@
 #define SOURCE_FILE "TRAINING_LOOP_API"
 
 #include <stddef.h>
+#include <stdlib.h>
 
 #include "Common.h"
 #include "DataLoaderApi.h"
 #include "InferenceApi.h"
+#include "LrScheduler.h"
 #include "Optimizer.h"
 #include "StorageApi.h"
 #include "TensorApi.h"
@@ -45,6 +47,35 @@ static size_t argmax(const float *data, size_t n) {
     return maxIdx;
 }
 
+/* Argmax over a wire tensor in ITS OWN dtype (#206 acceptance prerequisite):
+ * SYM_INT32 mantissa order IS value order (scale > 0), so no dequant is
+ * needed — while casting the int32 codes to float* garbles the comparison
+ * (negative mantissas reinterpret as NaN bit patterns and freeze a float
+ * argmax at index 0). */
+static size_t argmaxByTensor(const tensor_t *t, size_t n) {
+    switch (t->quantization->type) {
+    case FLOAT32:
+        return argmax((const float *)t->data, n);
+    case SYM_INT32: {
+        const int32_t *m = (const int32_t *)t->data;
+        size_t maxIdx = 0;
+        int32_t maxVal = m[0];
+        for (size_t i = 1; i < n; i++) {
+            if (m[i] > maxVal) {
+                maxVal = m[i];
+                maxIdx = i;
+            }
+        }
+        return maxIdx;
+    }
+    default:
+        PRINT_ERROR("evaluate: output-wire dtype %d not supported for argmax "
+                    "(FLOAT32/SYM_INT32)",
+                    (int)t->quantization->type);
+        exit(1);
+    }
+}
+
 float evaluationEpoch(layer_t **model, size_t modelSize, lossFuncType_t funcType,
                       dataLoader_t *dataLoader, inferenceWithLossFn_t inferenceFn,
                       reduction_t forwardReduction) {
@@ -78,10 +109,8 @@ static float evaluateBatchInternal(layer_t **model, size_t modelSize, lossFuncTy
                                               batch->samples[i]->label, funcType, forwardReduction);
         totalLoss += stats->loss;
 
-        float *outputData = (float *)stats->output->data;
-        float *labelData = (float *)batch->samples[i]->label->data;
-        size_t predicted = argmax(outputData, numClasses);
-        size_t target = argmax(labelData, numClasses);
+        size_t predicted = argmaxByTensor(stats->output, numClasses);
+        size_t target = argmaxByTensor(batch->samples[i]->label, numClasses);
 
         if (predicted == target) {
             tp[predicted]++;
@@ -225,10 +254,16 @@ classificationReport_t evaluationEpochWithReport(layer_t **model, size_t modelSi
 
 trainingRunResult_t trainingRun(layer_t **model, size_t modelSize, lossConfig_t lossConfig,
                                 dataLoader_t *trainDataLoader, dataLoader_t *evalDataLoader,
-                                optimizer_t *optimizer, size_t numberOfEpochs,
-                                calculateGradsFn_t calculateGradsFn,
+                                optimizer_t *optimizer, lrScheduler_t *scheduler,
+                                size_t numberOfEpochs, calculateGradsFn_t calculateGradsFn,
                                 inferenceWithLossFn_t inferenceFn, epochCallbackFn_t callback) {
     trainingRunResult_t result = {0};
+
+    if (scheduler != NULL && scheduler->optimizer != optimizer) {
+        PRINT_ERROR("trainingRun: scheduler is wired to a different optimizer than the one "
+                    "passed to trainingRun (#327)");
+        exit(1);
+    }
 
     batch_t *firstBatch = evalDataLoader->getBatch(evalDataLoader, 0);
     size_t numClasses = calcNumberOfElementsByTensor(firstBatch->samples[0]->label);
@@ -252,6 +287,10 @@ trainingRunResult_t trainingRun(layer_t **model, size_t modelSize, lossConfig_t 
 
         if (callback != NULL) {
             callback(epoch, trainLoss, evalStats);
+        }
+
+        if (scheduler != NULL) {
+            lrSchedulerStep(scheduler);
         }
 
         result.finalTrainLoss = trainLoss;

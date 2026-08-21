@@ -1,11 +1,23 @@
+add_subdirectory(continual_learning)
 add_subdirectory(data_loader)
 add_subdirectory(layer)
 add_subdirectory(optimizer)
 add_subdirectory(tensor)
 add_subdirectory(training_loop)
 
-add_library(LayerCommon INTERFACE)
-target_include_directories(LayerCommon INTERFACE include)
+add_library(MemProfile MemProfile.c)
+target_include_directories(MemProfile PUBLIC include)
+find_package(Threads REQUIRED)
+target_link_libraries(MemProfile PRIVATE Threads::Threads)
+
+add_library(LayerCommon LayerCommon.c)
+target_include_directories(LayerCommon PUBLIC include)
+target_link_libraries(LayerCommon PRIVATE
+        Common
+        Distributions
+        Tensor
+        TensorApi
+)
 
 add_library(InferenceApi InferenceApi.c)
 target_include_directories(InferenceApi PUBLIC include)
@@ -21,6 +33,7 @@ target_link_libraries(InferenceApi PRIVATE
         AdaptiveAvgPool1d
         LayerNorm
         QuantizationLayer
+        LayerConfigAccess
         LossFunction
         Common
         DataLoader
@@ -28,6 +41,7 @@ target_link_libraries(InferenceApi PRIVATE
 
 add_library(StorageApi StorageApi.c)
 target_include_directories(StorageApi PUBLIC include)
+target_compile_definitions(StorageApi PUBLIC $<$<BOOL:${ODT_MEM_PROFILE}>:ODT_MEM_PROFILE>)
 target_link_libraries(StorageApi PRIVATE
         Tensor
         Rounding
@@ -37,7 +51,9 @@ target_link_libraries(StorageApi PRIVATE
 add_library(LayerQuant LayerQuant.c)
 target_include_directories(LayerQuant PUBLIC include)
 target_link_libraries(LayerQuant PRIVATE
+        ArithmeticType
         Common
+        ExecuteOp
         Quantization
         Rounding
         StorageApi
@@ -69,13 +85,19 @@ target_link_libraries(StateDictApi PRIVATE
 )
 
 
+add_library(LayerConfigAccess LayerConfigAccess.c)
+target_include_directories(LayerConfigAccess PUBLIC include)
+target_link_libraries(LayerConfigAccess PRIVATE
+        ArithmeticType
+        Common
+        CommonLayerLibs
+)
+
 add_library(ModelValidationApi ModelValidationApi.c)
 target_include_directories(ModelValidationApi PUBLIC include)
 target_link_libraries(ModelValidationApi PRIVATE
         Common
         Layer
-        LayerNorm
-        Linear
         Quantization
         Rounding
         Tensor

@@ -10,6 +10,7 @@
 #include "LayerQuant.h"
 #include "LossFunction.h"
 #include "Optimizer.h"
+#include "OptimizerApi.h"
 #include "QuantizationApi.h"
 #include "SgdApi.h"
 #include "StateDictApi.h"
@@ -96,7 +97,7 @@ void testInference_ProducesAdaptiveMeans(void) {
     TEST_ASSERT_FLOAT_WITHIN(1e-5f, 3.5f, out1);
 }
 
-// Exercises Optimizer.c calcNumberOfStatesByLayerType + SgdApi.c state-alloc:
+// Exercises Optimizer.c calcNumberOfStatesByLayer + SgdApi.c state-alloc:
 // the layer is parameter-less, so both must classify it as zero-state.
 void testOptimizer_ZeroStatesForParameterlessPool(void) {
     quantization_t *q = quantizationInitFloat();
@@ -104,11 +105,15 @@ void testOptimizer_ZeroStatesForParameterlessPool(void) {
     layer_t *model[1] = {pool};
 
     size_t numStates = calcTotalNumberOfStates(model, 1);
-    optimizer_t *optim = sgdMCreateOptim(0.01f, 0.9f, 0.0f, model, 1, FLOAT32);
+    quantization_t *momentumQ = quantizationInitFloat();
+    optimizer_t *optim =
+        sgdMCreateOptim(0.01f, 0.9f, 0.0f, model, 1, momentumQ,
+                        (arithmetic_t){.type = ARITH_FLOAT32, .roundingMode = HALF_AWAY});
     size_t sizeStates = optim->sizeStates;
 
-    freeOptimSgdM(optim);
+    freeOptim(optim);
     freeAdaptiveAvgPool1dLayer(pool);
+    freeQuantization(momentumQ);
     freeQuantization(q);
 
     TEST_ASSERT_EQUAL_UINT(0, numStates);

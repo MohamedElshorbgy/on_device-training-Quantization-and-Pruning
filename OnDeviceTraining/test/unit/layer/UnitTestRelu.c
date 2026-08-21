@@ -1,4 +1,6 @@
+#include "ArithmeticType.h"
 #include "DTypes.h"
+#include "DeathTest.h"
 #include "LayerQuant.h"
 #include "Quantization.h"
 #include "QuantizationApi.h"
@@ -36,7 +38,9 @@ void testReluForwardFloat() {
 
     /* 3. Build shared float quantization for the layer. */
     quantization_t *floatQ = quantizationInitFloat();
-    layer_t *reluLayer = reluLayerInitLegacy(floatQ, floatQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, floatQ);
+    layer_t *reluLayer = reluLayerInit(&lq);
 
     /* 4. Exercise. */
     reluForward(reluLayer, input, output);
@@ -47,7 +51,7 @@ void testReluForwardFloat() {
 
     /* 6. FREE in reverse-init order. freeReluLayer releases only the layer
      *    config wrapper; the shared floatQ is freed exactly once at the end. */
-    freeReluLayerLegacy(reluLayer);
+    freeReluLayer(reluLayer);
     freeTensor(output);
     freeTensor(input);
     freeQuantization(floatQ);
@@ -83,7 +87,9 @@ void testReluForwardSymInt32() {
 
     /* 3. Shared SymInt32 quantization for the layer. */
     quantization_t *symIntQ = quantizationInitSymInt32(HALF_AWAY);
-    layer_t *reluLayer = reluLayerInitLegacy(symIntQ, symIntQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, symIntQ);
+    layer_t *reluLayer = reluLayerInit(&lq);
     layerFunctions_t reluFns = layerFunctions[RELU];
     reluFns.forward(reluLayer, input, output);
 
@@ -107,7 +113,7 @@ void testReluForwardSymInt32() {
 
     /* 6. FREE. */
     freeTensor(outputFloat);
-    freeReluLayerLegacy(reluLayer);
+    freeReluLayer(reluLayer);
     freeTensor(output);
     freeTensor(input);
     freeQuantization(symIntQ);
@@ -153,7 +159,9 @@ void testReluBackwardFloat() {
 
     /* 4. Build the layer with shared float quantization. */
     quantization_t *floatQ = quantizationInitFloat();
-    layer_t *reluLayer = reluLayerInitLegacy(floatQ, floatQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, floatQ);
+    layer_t *reluLayer = reluLayerInit(&lq);
     layerFunctions_t reluFns = layerFunctions[RELU];
     reluFns.backward(reluLayer, forwardInput, loss, propLoss);
 
@@ -164,7 +172,7 @@ void testReluBackwardFloat() {
     }
 
     /* 6. FREE. */
-    freeReluLayerLegacy(reluLayer);
+    freeReluLayer(reluLayer);
     freeTensor(propLoss);
     freeTensor(loss);
     freeTensor(forwardInput);
@@ -209,7 +217,9 @@ void testReluBackwardSymInt32() {
 
     /* 4. Build layer with shared SymInt32 quantization. */
     quantization_t *symIntQ = quantizationInitSymInt32(HALF_AWAY);
-    layer_t *reluLayer = reluLayerInitLegacy(symIntQ, symIntQ);
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, symIntQ);
+    layer_t *reluLayer = reluLayerInit(&lq);
     layerFunctions_t reluFns = layerFunctions[RELU];
     reluFns.backward(reluLayer, forwardInput, loss, propLoss);
 
@@ -231,7 +241,7 @@ void testReluBackwardSymInt32() {
 
     /* 7. FREE. */
     freeTensor(propLossFloat);
-    freeReluLayerLegacy(reluLayer);
+    freeReluLayer(reluLayer);
     freeTensor(propLoss);
     freeTensor(loss);
     freeTensor(forwardInput);
@@ -247,17 +257,20 @@ void testReluBackwardSymInt32() {
 void testReluLayerInitAndFreeRoundTrip(void) {
     /* Roundtrip: reluLayerInit allocates layer + outer layerConfig +
      * inner reluConfig (3 reserveMemory calls). freeReluLayer must
-     * release all three. Pre-fix this test runs to completion but leaks
-     * the inner reluConfig; post-fix it is leak-clean (verified via the
-     * LSan sweep). NULL is acceptable for the quantization arguments —
-     * reluLayerInit only stores them, freeReluLayer doesn't touch them. */
-    layer_t *reluLayer = reluLayerInitLegacy(NULL, NULL);
+     * release all three. reluLayerInit requires non-NULL outputQ/propLossQ
+     * (validateLayerQuantForRelu), so this uses a minimal real profile
+     * instead of the old Legacy ctor's NULL-tolerant borrow. */
+    quantization_t *q = quantizationInitFloat();
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, q);
+    layer_t *reluLayer = reluLayerInit(&lq);
     TEST_ASSERT_NOT_NULL(reluLayer);
     TEST_ASSERT_EQUAL_INT(RELU, reluLayer->type);
     TEST_ASSERT_NOT_NULL(reluLayer->config);
     TEST_ASSERT_NOT_NULL(reluLayer->config->relu);
 
-    freeReluLayerLegacy(reluLayer);
+    freeReluLayer(reluLayer);
+    freeQuantization(q);
 }
 
 /* ============================================================================
@@ -268,8 +281,10 @@ void testReluLayerInitBorrowingStoresLqPointers(void) {
     quantization_t *qFwd = quantizationInitFloat();
     quantization_t *qBwd = quantizationInitFloat();
     layerQuant_t lq = {
-        .forwardMath = qFwd,
-        .backwardMath = qBwd,
+        .forwardMath = arithmeticFromQuantization(qFwd),
+        .propLossMath = arithmeticFromQuantization(qBwd),
+        .outputQ = qFwd,
+        .propLossQ = qBwd,
         /* weightStorage / biasStorage ignored by ReLU */
     };
 
@@ -279,8 +294,10 @@ void testReluLayerInitBorrowingStoresLqPointers(void) {
     TEST_ASSERT_EQUAL_INT(RELU, layer->type);
 
     reluConfig_t *cfg = layer->config->relu;
-    TEST_ASSERT_EQUAL_PTR(qFwd, cfg->forwardQ);
-    TEST_ASSERT_EQUAL_PTR(qBwd, cfg->backwardQ);
+    TEST_ASSERT_EQUAL_PTR(qFwd, cfg->outputQ);
+    TEST_ASSERT_EQUAL_PTR(qBwd, cfg->propLossQ);
+    TEST_ASSERT_EQUAL_INT(ARITH_FLOAT32, cfg->forwardMath.type);
+    TEST_ASSERT_EQUAL_INT(ARITH_FLOAT32, cfg->propLossMath.type);
     TEST_ASSERT_FALSE(cfg->ownsQuantizations);
 
     freeReluLayer(layer);
@@ -290,16 +307,19 @@ void testReluLayerInitOwningDeepCopiesLqPointers(void) {
     quantization_t *qFwd = quantizationInitFloat();
     quantization_t *qBwd = quantizationInitFloat();
     layerQuant_t lq = {
-        .forwardMath = qFwd,
-        .backwardMath = qBwd,
+        .forwardMath = arithmeticFromQuantization(qFwd),
+        .propLossMath = arithmeticFromQuantization(qBwd),
+        .outputQ = qFwd,
+        .propLossQ = qBwd,
     };
 
     layer_t *layer = reluLayerInitOwning(&lq);
 
     reluConfig_t *cfg = layer->config->relu;
-    TEST_ASSERT_NOT_EQUAL(qFwd, cfg->forwardQ);
-    TEST_ASSERT_NOT_EQUAL(qBwd, cfg->backwardQ);
-    TEST_ASSERT_EQUAL_INT(qFwd->type, cfg->forwardQ->type);
+    TEST_ASSERT_NOT_EQUAL(qFwd, cfg->outputQ);
+    TEST_ASSERT_NOT_EQUAL(qBwd, cfg->propLossQ);
+    TEST_ASSERT_EQUAL_INT(qFwd->type, cfg->outputQ->type);
+    TEST_ASSERT_EQUAL_INT(ARITH_FLOAT32, cfg->forwardMath.type);
     TEST_ASSERT_TRUE(cfg->ownsQuantizations);
 
     freeReluLayer(layer);
@@ -308,6 +328,48 @@ void testReluLayerInitOwningDeepCopiesLqPointers(void) {
 void setUp() {}
 void tearDown() {}
 
+/* #315: reluBackward dispatches on the layer's DECLARED propLossMath and
+ * raw-casts the wire data pointers without checking the wires' ACTUAL dtype. A
+ * FLOAT32 arm fed SYM_INT32 wires reads int mantissa codes as floats — silent
+ * garbage grads that propagate with no diagnostic (the SYM arm on FLOAT32 wires
+ * NULL-derefs qConfig instead). Guard the wire dtypes and fail fast, mirroring
+ * the LayerNorm/GroupNorm backward guards. */
+void testReluBackwardExitsOnDtypeMismatch() {
+    symInt32QConfig_t qc;
+    initSymInt32QConfig(HALF_AWAY, &qc);
+    qc.scale = 1.f;
+    quantization_t symQ;
+    initSymInt32Quantization(&qc, &symQ);
+
+    size_t dims[] = {6};
+    size_t order[] = {0};
+    shape_t shape = {.dimensions = dims, .numberOfDimensions = 1, .orderOfDimensions = order};
+
+    int32_t fwdData[] = {-1, 0, 1, 2, 5, -6};
+    tensor_t forwardInput;
+    setTensorValues(&forwardInput, (uint8_t *)fwdData, &shape, &symQ, NULL);
+
+    int32_t lossData[] = {0, 2, -4, 6, 3, 2};
+    tensor_t loss;
+    setTensorValues(&loss, (uint8_t *)lossData, &shape, &symQ, NULL);
+
+    int32_t propLossData[6] = {0};
+    tensor_t propLoss;
+    setTensorValues(&propLoss, (uint8_t *)propLossData, &shape, &symQ, NULL);
+
+    /* FLOAT32-declared layer (propLossMath = ARITH_FLOAT32) fed SYM_INT32 wires. */
+    quantization_t *floatQ = quantizationInitFloat();
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, floatQ);
+    layer_t *reluLayer = reluLayerInit(&lq);
+    layerFunctions_t reluFns = layerFunctions[RELU];
+
+    ASSERT_EXITS_WITH_FAILURE(reluFns.backward(reluLayer, &forwardInput, &loss, &propLoss));
+
+    freeReluLayer(reluLayer);
+    freeQuantization(floatQ);
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(testReluForwardFloat);
@@ -315,6 +377,7 @@ int main(void) {
 
     RUN_TEST(testReluBackwardFloat);
     RUN_TEST(testReluBackwardSymInt32);
+    RUN_TEST(testReluBackwardExitsOnDtypeMismatch);
 
     RUN_TEST(testReluLayerInitAndFreeRoundTrip);
 

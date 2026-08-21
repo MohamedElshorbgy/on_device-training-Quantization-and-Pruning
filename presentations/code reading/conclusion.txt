@@ -1,0 +1,27 @@
+1-common.h
+		Common.h is a header file contains no functions, only preprocessor macros. It is included by every other .c file
+		in the project. It provides three debug-print macros (for printing coloured messages at different severity levels) and one
+		raw byte-dump macro that prints the contents of a memory buffer in hexadecimal. Everything here is controlled by a
+		compile-time verbosity level called DLEVEL (Debug Level), so all of this output can be completely removed from the
+		final firmware by not passing any debug flag to the compiler. Nothing in this file runs at program start-up; macros are text
+		replacements that happen before the compiler sees the code.
+		Verbosity means how much output a program produces. High verbosity = many messages. Low verbosity = silent.
+		Compile-time verbosity means the level of output is decided at the moment you compile the code — not at the
+		moment you run it. Once compiled, that level is baked in and cannot change without recompiling.
+		Firmware is software that is stored in non-volatile memory (flash) inside a chip and controls the chip's hardware directly.
+		
+2-Rounding
+		Rounding.c provides the two rounding strategies used throughout quantization. The first is Half-To-Even rounding
+		, which is the standard deterministic strategy: 0.5 rounds to the nearest even integer.
+		EX:2.3  →  2    (0.3 < 0.5, round down)
+		2.7  →  3    (0.7 > 0.5, round up)
+		2.5  →  3    (exactly 0.5 → away from zero = up)
+		-2.5  → -3    (exactly 0.5 → away from zero = down)
+		The second is Stochastic Rounding Half-To-Even, which is the core mathematical trick that makes Fully Quantized Training
+		work. Stochastic Rounding adds a small random value between[0.5,-0.5] before rounding, so that a gradient value of 0.1
+		will round up to 1 about 10% of the time and round down to 0 about 90% of the time — preserving the expected value of
+		the gradient even though individual samples are rounded to integers.
+		EX:jitter = +0.4  →  2.3 + 0.4 = 2.7  →  rounds to 3
+		jitter = -0.4  →  2.3 - 0.4 = 1.9  →  rounds to 2
+		jitter = +0.2  →  2.3 + 0.2 = 2.5  →  rounds to 3
+		jitter = -0.1  →  2.3 - 0.1 = 2.2  →  rounds to 2

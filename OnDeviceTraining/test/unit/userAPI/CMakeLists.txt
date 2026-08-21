@@ -4,10 +4,15 @@ add_elastic_ai_unit_test(
 )
 
 
+add_elastic_ai_unit_test(LIB_UNDER_TEST MemProfile MORE_LIBS StorageApi)
+
+
 add_elastic_ai_unit_test(
         LIB_UNDER_TEST
         LayerQuant
         MORE_LIBS
+        ArithmeticType
+        Common
         QuantizationApi
         Quantization
         Rounding
@@ -18,6 +23,7 @@ add_elastic_ai_unit_test(
         LIB_UNDER_TEST
         LayerWeightsApi
         MORE_LIBS
+        Common
         LinearApi
         Conv1dApi
         Conv1dTransposedApi
@@ -34,6 +40,7 @@ add_elastic_ai_unit_test(
         Kernel
         Tensor
         TensorApi
+        odt_test_layer_builders
 )
 
 
@@ -41,6 +48,7 @@ add_elastic_ai_unit_test(
         LIB_UNDER_TEST
         StateDictApi
         MORE_LIBS
+        Common
         LinearApi
         ReluApi
         LayerNormApi
@@ -65,14 +73,17 @@ add_elastic_ai_unit_test(
         CommonLayerLibs
         TensorApi
         LinearApi
+        LayerWeightsApi
         ReluApi
         LayerNormApi
         LayerNorm
         LayerQuant
+        ArithmeticType
         Quantization
         QuantizationApi
         LossFunction
         DataLoader
+        odt_test_layer_builders
 )
 
 
@@ -86,6 +97,7 @@ add_elastic_ai_unit_test(
         CommonLayerLibs
         TensorApi
         LinearApi
+        ArithmeticType
         ReluApi
         SgdApi
         QuantizationApi
@@ -94,18 +106,28 @@ add_elastic_ai_unit_test(
         DataLoader
         DataLoaderApi
         StorageApi
+        LrScheduler
+        OptimizerApi
+        Sgd
+        Optimizer
+        odt_test_death
+        odt_test_layer_builders
 )
 
 add_elastic_ai_unit_test(
         LIB_UNDER_TEST
         Conv1dApi
         MORE_LIBS
+        ArithmeticType
+        Common
         LayerQuant
         LayerCommon
         QuantizationApi
         Quantization
         Rounding
         Conv1d
+        Distributions
+        RNG
         Kernel
         Tensor
         TensorApi
@@ -115,12 +137,16 @@ add_elastic_ai_unit_test(
         LIB_UNDER_TEST
         Conv1dTransposedApi
         MORE_LIBS
+        ArithmeticType
+        Common
         LayerQuant
         LayerCommon
         QuantizationApi
         Quantization
         Rounding
         Conv1dTransposed
+        Distributions
+        RNG
         Kernel
         Tensor
         TensorApi
@@ -130,6 +156,8 @@ add_elastic_ai_unit_test(
         LIB_UNDER_TEST
         Pool1dApi
         MORE_LIBS
+        ArithmeticType
+        Common
         LayerQuant
         QuantizationApi
         Quantization
@@ -145,6 +173,8 @@ add_elastic_ai_unit_test(
         LIB_UNDER_TEST
         AdaptivePool1dApi
         MORE_LIBS
+        ArithmeticType
+        Common
         LayerQuant
         QuantizationApi
         Quantization
@@ -163,6 +193,7 @@ target_link_libraries(UnitTestDropoutIntegration PRIVATE
         Dropout
         Bernoulli
         RNG
+        OptimizerApi
         SgdApi
         Sgd
         Optimizer
@@ -187,6 +218,7 @@ target_link_libraries(UnitTestLayerNormIntegration PRIVATE
         CommonLayerLibs
         LayerNormApi
         LayerNorm
+        OptimizerApi
         SgdApi
         Sgd
         Optimizer
@@ -202,6 +234,41 @@ target_link_libraries(UnitTestLayerNormIntegration PRIVATE
 )
 __register_target_as_unit_test(UnitTestLayerNormIntegration)
 
+add_executable(UnitTestGroupNormIntegration UnitTestGroupNormIntegration.c)
+target_link_libraries(UnitTestGroupNormIntegration PRIVATE
+        unity
+        TrainingLoopApi
+        TrainingEpochDefault
+        TrainingBatchDefault
+        CalculateGradsSequential
+        CommonLayerLibs
+        GroupNormApi
+        GroupNorm
+        Reduce
+        Conv1dApi
+        Conv1d
+        AdaptivePool1dApi
+        FlattenApi
+        SoftmaxApi
+        ReluApi
+        LinearApi
+        OptimizerApi
+        SgdApi
+        Sgd
+        Optimizer
+        StateDictApi
+        LayerQuant
+        LayerCommon
+        TensorApi
+        QuantizationApi
+        LossFunction
+        InferenceApi
+        DataLoader
+        DataLoaderApi
+        StorageApi
+)
+__register_target_as_unit_test(UnitTestGroupNormIntegration)
+
 add_executable(UnitTestAdaptiveAvgPool1dIntegration UnitTestAdaptiveAvgPool1dIntegration.c)
 target_link_libraries(UnitTestAdaptiveAvgPool1dIntegration PRIVATE
         unity
@@ -209,6 +276,7 @@ target_link_libraries(UnitTestAdaptiveAvgPool1dIntegration PRIVATE
         CalculateGradsSequential
         CommonLayerLibs
         AdaptivePool1dApi
+        OptimizerApi
         SgdApi
         Sgd
         Optimizer
@@ -233,8 +301,11 @@ target_link_libraries(UnitTestMultiLayerTraining PRIVATE
         CommonLayerLibs
         TensorApi
         LinearApi
+        LayerQuant
+        ArithmeticType
         ReluApi
         SoftmaxApi
+        OptimizerApi
         SgdApi
         QuantizationApi
         LossFunction
@@ -242,6 +313,7 @@ target_link_libraries(UnitTestMultiLayerTraining PRIVATE
         DataLoader
         DataLoaderApi
         StorageApi
+        odt_test_layer_builders
 )
 __register_target_as_unit_test(UnitTestMultiLayerTraining)
 
@@ -255,8 +327,10 @@ target_link_libraries(UnitTestMnistSmoke PRIVATE
         CommonLayerLibs
         TensorApi
         LinearApi
+        LayerQuant
         ReluApi
         SoftmaxApi
+        OptimizerApi
         SgdApi
         QuantizationApi
         LossFunction
@@ -264,6 +338,7 @@ target_link_libraries(UnitTestMnistSmoke PRIVATE
         DataLoader
         DataLoaderApi
         StorageApi
+        odt_test_layer_builders
 )
 __register_target_as_unit_test(UnitTestMnistSmoke)
 
@@ -276,6 +351,7 @@ target_link_libraries(UnitTestFlattenIntegration PRIVATE
         FlattenApi
         LinearApi
         SoftmaxApi
+        LayerQuant
         SgdApi
         TensorApi
         QuantizationApi
@@ -286,6 +362,38 @@ target_link_libraries(UnitTestFlattenIntegration PRIVATE
 )
 __register_target_as_unit_test(UnitTestFlattenIntegration)
 
+add_executable(UnitTestBiaslessConvOptim UnitTestBiaslessConvOptim.c)
+target_link_libraries(UnitTestBiaslessConvOptim PRIVATE
+        unity
+        Conv1dApi
+        Conv1d
+        Conv1dTransposedApi
+        Conv1dTransposed
+        ConvTranspose1dKernel
+        Conv1dKernel
+        SlidingWindow1d
+        LinearApi
+        Linear
+        OptimizerApi
+        SgdApi
+        Sgd
+        Optimizer
+        ArithmeticType
+        Common
+        LayerQuant
+        LayerCommon
+        QuantizationApi
+        Quantization
+        Rounding
+        Distributions
+        RNG
+        Kernel
+        Tensor
+        TensorApi
+        StorageApi
+)
+__register_target_as_unit_test(UnitTestBiaslessConvOptim)
+
 add_executable(UnitTestOptimizerScaling UnitTestOptimizerScaling.c)
 target_link_libraries(UnitTestOptimizerScaling PRIVATE
         unity
@@ -294,10 +402,12 @@ target_link_libraries(UnitTestOptimizerScaling PRIVATE
         Sgd
         Optimizer
         LinearApi
+        ArithmeticType
         CommonLayerLibs
         TensorApi
         QuantizationApi
         StorageApi
+        odt_test_layer_builders
 )
 __register_target_as_unit_test(UnitTestOptimizerScaling)
 
@@ -307,6 +417,7 @@ target_link_libraries(UnitTestQuantizationApiBitsControl PRIVATE
         QuantizationApi
         Quantization
         Rounding
+        odt_test_death
 )
 __register_target_as_unit_test(UnitTestQuantizationApiBitsControl)
 add_executable(UnitTestQuantLayerIntegration UnitTestQuantLayerIntegration.c)
@@ -318,10 +429,12 @@ target_link_libraries(UnitTestQuantLayerIntegration PRIVATE
         LayerNormApi
         LayerNorm
         QuantizationLayer
+        OptimizerApi
         SgdApi
         Sgd
         Optimizer
         LayerQuant
+        ArithmeticType
         LayerCommon
         LinearApi
         QuantLayerApi
@@ -332,6 +445,11 @@ target_link_libraries(UnitTestQuantLayerIntegration PRIVATE
         InferenceApi
         DataLoader
         StorageApi
+        Conv1dTransposed
+        Conv1dKernel
+        ConvTranspose1dKernel
+        Kernel
+        odt_test_layer_builders
 )
 __register_target_as_unit_test(UnitTestQuantLayerIntegration)
 
@@ -339,14 +457,41 @@ add_elastic_ai_unit_test(
         LIB_UNDER_TEST
         ModelValidationApi
         MORE_LIBS
+        ArithmeticType
         CommonLayerLibs
-        QuantizationLayer
         LinearApi
         LayerCommon
         LayerQuant
         QuantizationApi
         Quantization
         Rounding
+        TensorApi
+        StorageApi
+)
+
+add_elastic_ai_unit_test(
+        LIB_UNDER_TEST
+        LayerConfigAccess
+        MORE_LIBS
+        ArithmeticType
+        CommonLayerLibs
+        LinearApi
+        ReluApi
+        SoftmaxApi
+        Conv1dApi
+        Conv1dTransposedApi
+        Pool1dApi
+        AdaptivePool1dApi
+        DropoutApi
+        LayerNormApi
+        QuantLayerApi
+        FlattenApi
+        LayerCommon
+        LayerQuant
+        QuantizationApi
+        Quantization
+        Rounding
+        Tensor
         TensorApi
         StorageApi
 )

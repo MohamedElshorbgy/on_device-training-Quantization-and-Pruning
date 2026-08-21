@@ -1,0 +1,21 @@
+-  size_t is the unsigned integer data type that used for the count
+
+-  int32_t (a signed 32-bit integer), uint8_t (an unsigned 8-bit integer)
+
+-  memcpy(destination, source, numberOfBytes); it copies the numberOfBytes of source to the destination
+
+-  #include<stddef.h> is a standard C library header that defines fundamental system types, constants, and utility macros used across mainstream and 
+embedded C programming such as size_t
+
+-  #include <stdint.h> is a standard C library header that provides fixed-width integer types
+
+-  free() is a standard C function. It is declared in <stdlib.h>.
+
+-  typedef returnType (*typeName)(parameterTypes); to define a data type of a function. EX: typedef void (*conversionFunction_t)(tensor_t *inputTensor, tensor_t *outputTensor);
+
+-  return_type function_name(parameter_type parameter_name, ...);     to declare a function 
+
+-  return_type function_name(parameter_type parameter_name) {
+    // code here
+    return value;  // if return type is not void
+}                                                                     to define a function 

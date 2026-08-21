@@ -1,5 +1,8 @@
 #define SOURCE_FILE "UNIT_TEST_CONV1D_API"
 
+#include <math.h>
+
+#include "ArithmeticType.h"
 #include "Conv1d.h"
 #include "Conv1dApi.h"
 #include "Kernel.h"
@@ -7,12 +10,30 @@
 #include "LayerCommon.h"
 #include "LayerQuant.h"
 #include "QuantizationApi.h"
+#include "RNG.h"
 #include "Tensor.h"
 #include "TensorApi.h"
 #include "unity.h"
 
 void setUp() {}
 void tearDown() {}
+
+/*! Returns the max |value| over a FLOAT32 tensor's data buffer. */
+static float maxAbsFloat(const tensor_t *t) {
+    const float *vals = (const float *)t->data;
+    size_t n = t->shape->dimensions[0];
+    for (size_t d = 1; d < t->shape->numberOfDimensions; d++) {
+        n *= t->shape->dimensions[d];
+    }
+    float m = 0.0f;
+    for (size_t i = 0; i < n; i++) {
+        float a = fabsf(vals[i]);
+        if (a > m) {
+            m = a;
+        }
+    }
+    return m;
+}
 
 void testConv1dLayerInitBorrowingBuildsLayerWithCorrectShape(void) {
     quantization_t *q = quantizationInitFloat();
@@ -39,10 +60,11 @@ void testConv1dLayerInitBorrowingBuildsLayerWithCorrectShape(void) {
     TEST_ASSERT_NOT_NULL(cfg);
     TEST_ASSERT_FALSE(cfg->ownsQuantizations);
 
-    /* Borrowing variant stores pointers verbatim */
-    TEST_ASSERT_EQUAL_PTR(q, cfg->forwardQ);
-    TEST_ASSERT_EQUAL_PTR(q, cfg->weightGradQ);
-    TEST_ASSERT_EQUAL_PTR(q, cfg->biasGradQ);
+    /* Borrowing variant stores the storage pointer verbatim; the arithmetic
+     * slots are by-value derivations of q's type. */
+    TEST_ASSERT_EQUAL_PTR(q, cfg->outputQ);
+    TEST_ASSERT_EQUAL_INT(ARITH_FLOAT32, cfg->weightGradMath.type);
+    TEST_ASSERT_EQUAL_INT(ARITH_FLOAT32, cfg->biasGradMath.type);
     TEST_ASSERT_EQUAL_PTR(q, cfg->propLossQ);
 
     /* Weights allocated with shape [outChannels, inChannels/groups, kernelSize] */
@@ -158,14 +180,14 @@ void testConv1dLayerInitOwningDeepCopiesQuantizations(void) {
 
     conv1dConfig_t *cfg = layer->config->conv1d;
 
-    /* Owning variant: cfg->forwardQ is a fresh allocation, NOT the original q */
-    TEST_ASSERT_NOT_EQUAL(q, cfg->forwardQ);
-    TEST_ASSERT_NOT_EQUAL(q, cfg->weightGradQ);
-    TEST_ASSERT_NOT_EQUAL(q, cfg->biasGradQ);
+    /* Owning variant: cfg->outputQ is a fresh allocation, NOT the original q */
+    TEST_ASSERT_NOT_EQUAL(q, cfg->outputQ);
+    TEST_ASSERT_EQUAL_INT(ARITH_FLOAT32, cfg->weightGradMath.type);
+    TEST_ASSERT_EQUAL_INT(ARITH_FLOAT32, cfg->biasGradMath.type);
     TEST_ASSERT_NOT_EQUAL(q, cfg->propLossQ);
 
     /* But the copy has equal type to the original */
-    TEST_ASSERT_EQUAL_INT(q->type, cfg->forwardQ->type);
+    TEST_ASSERT_EQUAL_INT(q->type, cfg->outputQ->type);
 
     /* ownsQuantizations flag is set */
     TEST_ASSERT_TRUE(cfg->ownsQuantizations);
@@ -202,8 +224,12 @@ void testConv1dLayerInitKeepsFloat32GradEvenWithSymInt32BackwardMath(void) {
     quantization_t *fwd = quantizationInitFloat();
     quantization_t *bwd = quantizationInitSymInt32(HALF_AWAY);
     layerQuant_t lq = {
-        .forwardMath = fwd,
-        .backwardMath = bwd,
+        .forwardMath = arithmeticFromQuantization(fwd),
+        .weightGradMath = arithmeticFromQuantization(bwd),
+        .biasGradMath = arithmeticFromQuantization(bwd),
+        .propLossMath = arithmeticFromQuantization(bwd),
+        .outputQ = fwd,
+        .propLossQ = bwd,
         .weightStorage = fwd,
         .biasStorage = fwd,
     };
@@ -231,6 +257,129 @@ void testConv1dLayerInitKeepsFloat32GradEvenWithSymInt32BackwardMath(void) {
                                   "Conv1d bias grad must stay FLOAT32 (backward is FLOAT32-only)");
 }
 
+void testConv1dLayerInitOwningWeightGradStorageKnobOverridesFloatDefault(void) {
+    /* Default (knob == NULL) grad storage stays hard-pinned FLOAT32 (Conv1d
+     * backward is FLOAT32-only); a non-NULL weightGradStorage config must
+     * override that default end-to-end, through the same getQLike path
+     * gradInit already uses (mirrors Linear's #261 knob). */
+    quantization_t *q = quantizationInitFloat();
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, q);
+    quantization_t *gradKnob = quantizationInitSymInt32WithBits(HALF_AWAY, 16);
+    lq.weightGradStorage = gradKnob;
+
+    layer_t *layer = conv1dLayerInitOwning(
+        &(conv1dInit_t){
+            .inChannels = 3,
+            .outChannels = 4,
+            .kernelSize = 5,
+            .bias = BIAS_TRUE,
+        },
+        &lq);
+
+    conv1dConfig_t *cfg = layer->config->conv1d;
+    tensor_t *wGrad = getGradFromParameter(cfg->weights);
+    int gradType = wGrad->quantization->type;
+    /* Guard the qConfig dereference: a wrong-type grad (e.g. the knob silently
+     * ignored) has qConfig == NULL for FLOAT32 — asserting gradType first
+     * keeps that failure a clean assertion, not a NULL-deref crash. */
+    uint8_t gradBits =
+        (gradType == SYM_INT32) ? ((symInt32QConfig_t *)wGrad->quantization->qConfig)->qMaxBits : 0;
+
+    freeConv1dLayer(layer);
+    freeQuantization(gradKnob);
+    freeQuantization(q);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SYM_INT32, gradType,
+                                  "weightGradStorage knob must override the FLOAT32 default");
+    TEST_ASSERT_EQUAL_UINT8(16, gradBits);
+}
+
+void testConv1dLayerInitDefaultWeightsWithinPyTorchBound(void) {
+    /* PyTorch default Conv1d init: weight ~ U(-1/sqrt(fan_in), +1/sqrt(fan_in)),
+     * bias ~ U(-1/sqrt(fan_in), +1/sqrt(fan_in)); fan_in = inPerGroup*kernelSize.
+     * Today the factory uses gain=sqrt(2) (He) -> bound sqrt(6)/sqrt(fan_in),
+     * ~2.45x too wide, and bias is zero. Both must fail here pre-fix. */
+    const size_t inChannels = 16, outChannels = 64, kernelSize = 8;
+    const size_t fanIn = inChannels * kernelSize; /* groups=1 */
+    const float bound = 1.0f / sqrtf((float)fanIn);
+
+    quantization_t *q = quantizationInitFloat();
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, q);
+
+    rngSetSeed(123);
+    layer_t *layer = conv1dLayerInit(
+        &(conv1dInit_t){
+            .inChannels = inChannels,
+            .outChannels = outChannels,
+            .kernelSize = kernelSize,
+            .bias = BIAS_TRUE,
+        },
+        &lq);
+
+    conv1dConfig_t *cfg = layer->config->conv1d;
+    float weightMaxAbs = maxAbsFloat(cfg->weights->param);
+    float biasMaxAbs = maxAbsFloat(cfg->bias->param);
+
+    freeConv1dLayer(layer);
+    freeQuantization(q);
+
+    /* Weights must lie inside the PyTorch bound (with float slack). */
+    TEST_ASSERT_TRUE_MESSAGE(weightMaxAbs <= bound * 1.001f,
+                             "Conv1d default weights exceed PyTorch bound 1/sqrt(fan_in)");
+    /* And nearly reach it (a uniform of 8192 samples gets very close). */
+    TEST_ASSERT_TRUE_MESSAGE(weightMaxAbs >= bound * 0.85f,
+                             "Conv1d default weights far below PyTorch bound -> wrong scale");
+    /* Bias must be drawn from the same uniform: nonzero and within bound. */
+    TEST_ASSERT_TRUE_MESSAGE(biasMaxAbs > 0.0f,
+                             "Conv1d default bias is zero (PyTorch draws it from a uniform)");
+    TEST_ASSERT_TRUE_MESSAGE(biasMaxAbs <= bound * 1.001f,
+                             "Conv1d default bias exceeds PyTorch bound 1/sqrt(fan_in)");
+}
+
+void testConv1dLayerInitKaimingUniformOverrideUsesHeBound(void) {
+    /* Explicit weightInit = {INIT_KAIMING_UNIFORM} -> He init, default gain
+     * sqrt(2): kaimingUniform(sqrt(2), fan_in) = uniform(+/- sqrt(6)/sqrt(fan_in)).
+     * Must be wider than the PyTorch default bound (proves the override took
+     * effect) yet within the He bound. */
+    const size_t inChannels = 16, outChannels = 64, kernelSize = 8;
+    const size_t fanIn = inChannels * kernelSize; /* groups=1 */
+    const float defaultBound = 1.0f / sqrtf((float)fanIn);
+    const float heBound = sqrtf(6.0f) / sqrtf((float)fanIn);
+
+    quantization_t *q = quantizationInitFloat();
+    layerQuant_t lq;
+    layerQuantInitUniform(&lq, q);
+
+    rngSetSeed(123);
+    layer_t *layer = conv1dLayerInit(
+        &(conv1dInit_t){
+            .inChannels = inChannels,
+            .outChannels = outChannels,
+            .kernelSize = kernelSize,
+            .bias = BIAS_TRUE,
+            .weightInit = {INIT_KAIMING_UNIFORM},
+        },
+        &lq);
+
+    conv1dConfig_t *cfg = layer->config->conv1d;
+    float weightMaxAbs = maxAbsFloat(cfg->weights->param);
+    /* Bias is ALWAYS the PyTorch default uniform(+/- 1/sqrt(fan_in)),
+     * independent of the weight scheme. */
+    float biasMaxAbs = maxAbsFloat(cfg->bias->param);
+
+    freeConv1dLayer(layer);
+    freeQuantization(q);
+
+    TEST_ASSERT_TRUE_MESSAGE(weightMaxAbs > defaultBound,
+                             "He override did not widen weights beyond the PyTorch default bound");
+    TEST_ASSERT_TRUE_MESSAGE(weightMaxAbs <= heBound * 1.001f,
+                             "He weights exceed the sqrt(6)/sqrt(fan_in) bound");
+    TEST_ASSERT_TRUE_MESSAGE(biasMaxAbs <= defaultBound * 1.001f,
+                             "Bias must stay PyTorch default uniform regardless of weight scheme");
+}
+
 int main(void) {
     UNITY_BEGIN();
     RUN_TEST(testConv1dLayerInitBorrowingBuildsLayerWithCorrectShape);
@@ -240,5 +389,8 @@ int main(void) {
     RUN_TEST(testConv1dLayerInitOwningDeepCopiesQuantizations);
     RUN_TEST(testConv1dLayerInitOwningFreesAllAllocationsWithoutLeak);
     RUN_TEST(testConv1dLayerInitKeepsFloat32GradEvenWithSymInt32BackwardMath);
+    RUN_TEST(testConv1dLayerInitOwningWeightGradStorageKnobOverridesFloatDefault);
+    RUN_TEST(testConv1dLayerInitDefaultWeightsWithinPyTorchBound);
+    RUN_TEST(testConv1dLayerInitKaimingUniformOverrideUsesHeBound);
     return UNITY_END();
 }

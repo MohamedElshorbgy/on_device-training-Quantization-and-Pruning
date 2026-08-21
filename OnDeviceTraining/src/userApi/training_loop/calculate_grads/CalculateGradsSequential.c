@@ -12,7 +12,9 @@
 #include "Conv1d.h"
 #include "Conv1dTransposed.h"
 #include "Dropout.h"
+#include "GroupNorm.h"
 #include "Layer.h"
+#include "LayerConfigAccess.h"
 #include "LayerNorm.h"
 #include "Linear.h"
 #include "LossFunction.h"
@@ -22,6 +24,7 @@
 #include "Softmax.h"
 #include "StorageApi.h"
 #include "TensorApi.h"
+#include "TraceApi.h"
 #include "TrainingLoopApiInternal.h"
 
 static void setDropoutLayersTraining(layer_t **model, size_t modelSize, bool training) {
@@ -32,9 +35,10 @@ static void setDropoutLayersTraining(layer_t **model, size_t modelSize, bool tra
     }
 }
 
-trainingStats_t *calculateGradsSequential(layer_t **model, size_t modelSize,
-                                          lossConfig_t lossConfig, reduction_t forwardReduction,
-                                          tensor_t *input, tensor_t *label) {
+static trainingStats_t *calculateGradsImpl(layer_t **model, size_t modelSize,
+                                           lossConfig_t lossConfig, reduction_t forwardReduction,
+                                           tensor_t *input, tensor_t *label, traceSink_t sink,
+                                           void *sinkCtx) {
 
     tensor_t *layerOutputs[modelSize + 1];
     layerOutputs[0] = input;
@@ -47,6 +51,9 @@ trainingStats_t *calculateGradsSequential(layer_t **model, size_t modelSize,
         layerType_t currentLayerType = currentLayer->type;
         forwardFn_t forward = layerFunctions[currentLayerType].forward;
         forward(currentLayer, layerOutputs[i], layerOutputs[i + 1]);
+        if (sink != NULL) {
+            sink(sinkCtx, i, currentLayerType, "fwd", layerOutputs[i + 1]);
+        }
     }
 
     trainingStats_t *trainingStats = initTrainingStats(layerOutputs[modelSize]);
@@ -65,18 +72,23 @@ trainingStats_t *calculateGradsSequential(layer_t **model, size_t modelSize,
     }
 
     tensor_t gradNext;
-    initGradTensor(&gradNext, layerOutputs[modelSize]);
+    initGradTensor(&gradNext, layerOutputs[modelSize], NULL);
     lossFns.backward(layerOutputs[modelSize], label, &gradNext);
+    if (sink != NULL) {
+        sink(sinkCtx, modelSize, model[modelSize - 1]->type, "lossgrad", &gradNext);
+    }
 
     for (int i = (int)backwardIndex; i >= 0; i--) {
-        tensor_t gradCurr;
-        initGradTensor(&gradCurr, layerOutputs[i]);
-
         layerType_t layerType = model[i]->type;
+        /* agrad@i = gradient w.r.t. layer i's OUTPUT (the wire grad entering layer i's
+         * backward), matching the PyTorch forward-hook activation.grad. */
+        if (sink != NULL) {
+            sink(sinkCtx, (size_t)i, layerType, "agrad", &gradNext);
+        }
+        tensor_t gradCurr;
+        initGradTensor(&gradCurr, layerOutputs[i], backwardWireQ(model[i]));
         backwardFn_t backward = layerFunctions[layerType].backward;
-
         backward(model[i], layerOutputs[i], &gradNext, &gradCurr);
-
         deInitGradTensor(&gradNext);
         gradNext = gradCurr;
     }
@@ -88,55 +100,85 @@ trainingStats_t *calculateGradsSequential(layer_t **model, size_t modelSize,
     return trainingStats;
 }
 
+trainingStats_t *calculateGradsSequential(layer_t **model, size_t modelSize,
+                                          lossConfig_t lossConfig, reduction_t forwardReduction,
+                                          tensor_t *input, tensor_t *label) {
+    return calculateGradsImpl(model, modelSize, lossConfig, forwardReduction, input, label, NULL,
+                              NULL);
+}
+
+trainingStats_t *tracedGrads(layer_t **model, size_t modelSize, lossConfig_t lossConfig,
+                             reduction_t forwardReduction, tensor_t *input, tensor_t *label,
+                             traceSink_t sink, void *ctx) {
+    return calculateGradsImpl(model, modelSize, lossConfig, forwardReduction, input, label, sink,
+                              ctx);
+}
+
+/* Return the two parameter_t* of a trainable layer (bias may be NULL).
+ * Non-trainable layers return false. */
+static bool layerParameters(layer_t *layer, parameter_t **weightOut, parameter_t **biasOut) {
+    switch (layer->type) {
+    case LINEAR:
+        *weightOut = layer->config->linear->weights;
+        *biasOut = layer->config->linear->bias;
+        return true;
+    case CONV1D:
+        *weightOut = layer->config->conv1d->weights;
+        *biasOut = layer->config->conv1d->bias; /* may be NULL */
+        return true;
+    case CONV1D_TRANSPOSED:
+        *weightOut = layer->config->conv1dTransposed->weights;
+        *biasOut = layer->config->conv1dTransposed->bias;
+        return true;
+    case LAYERNORM:
+        *weightOut = layer->config->layerNorm->gamma;
+        *biasOut = layer->config->layerNorm->beta;
+        return true;
+    case GROUPNORM:
+        *weightOut = layer->config->groupNorm->gamma;
+        *biasOut = layer->config->groupNorm->beta;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void traceModelParams(layer_t **model, size_t modelSize, const char *tag, bool wantGrad,
+                             traceSink_t sink, void *ctx) {
+    char phase[64];
+    for (size_t i = 0; i < modelSize; i++) {
+        parameter_t *w = NULL, *b = NULL;
+        if (!layerParameters(model[i], &w, &b)) {
+            continue;
+        }
+        tensor_t *wt = wantGrad ? getGradFromParameter(w) : getParamFromParameter(w);
+        snprintf(phase, sizeof(phase), "%s.weight", tag);
+        sink(ctx, i, model[i]->type, phase, wt);
+        if (b != NULL) {
+            tensor_t *bt = wantGrad ? getGradFromParameter(b) : getParamFromParameter(b);
+            snprintf(phase, sizeof(phase), "%s.bias", tag);
+            sink(ctx, i, model[i]->type, phase, bt);
+        }
+    }
+}
+
+void traceModelWeights(layer_t **model, size_t modelSize, const char *tag, traceSink_t sink,
+                       void *ctx) {
+    traceModelParams(model, modelSize, tag, /*wantGrad=*/false, sink, ctx);
+}
+
+void traceModelGrads(layer_t **model, size_t modelSize, const char *tag, traceSink_t sink,
+                     void *ctx) {
+    traceModelParams(model, modelSize, tag, /*wantGrad=*/true, sink, ctx);
+}
+
 static void initLayerOutputs(tensor_t **layerOutputs, layer_t **model, size_t sizeNetwork) {
     for (size_t i = 0; i < sizeNetwork; i++) {
         layer_t *currentLayer = model[i];
-        quantization_t *currentQ = NULL;
-
-        switch (currentLayer->type) {
-        case LINEAR:
-            linearConfig_t *linearConfig = currentLayer->config->linear;
-            currentQ = linearConfig->forwardQ;
-            break;
-        case RELU:
-            reluConfig_t *reluConfig = currentLayer->config->relu;
-            currentQ = reluConfig->forwardQ;
-            break;
-        case SOFTMAX:
-            softmaxConfig_t *softmaxConfig = currentLayer->config->softmax;
-            currentQ = softmaxConfig->forwardQ;
-            break;
-        case FLATTEN:
+        quantization_t *currentQ = layerOutputQ(currentLayer);
+        if (currentQ == NULL) {
             // Flatten has no per-layer quantization; output dtype equals input dtype.
             currentQ = layerOutputs[i]->quantization;
-            break;
-        case CONV1D:
-            currentQ = currentLayer->config->conv1d->forwardQ;
-            break;
-        case CONV1D_TRANSPOSED:
-            currentQ = currentLayer->config->conv1dTransposed->forwardQ;
-            break;
-        case MAXPOOL1D:
-            currentQ = currentLayer->config->maxPool1d->forwardQ;
-            break;
-        case AVGPOOL1D:
-            currentQ = currentLayer->config->avgPool1d->forwardQ;
-            break;
-        case ADAPTIVE_AVGPOOL1D:
-            currentQ = currentLayer->config->adaptiveAvgPool1d->forwardQ;
-            break;
-        case DROPOUT:
-            currentQ = currentLayer->config->dropout->forwardQ;
-            break;
-        case LAYERNORM:
-            currentQ = currentLayer->config->layerNorm->forwardQ;
-            break;
-        case QUANTIZATION:
-            currentQ = currentLayer->config->quantization->forwardQ;
-            break;
-        default:
-            PRINT_ERROR("Unknown Layer Type!");
-            exit(1);
         }
 
         calcOutputShapeFn_t calcOutputShape = layerFunctions[currentLayer->type].calcOutputShape;
@@ -168,7 +210,7 @@ static void initLayerOutputs(tensor_t **layerOutputs, layer_t **model, size_t si
             q->type = SYM_INT32;
             symInt32QConfig_t *currentQC = currentQ->qConfig;
             symInt32QConfig_t *qC = reserveMemory(sizeof(symInt32QConfig_t));
-            initSymInt32QConfig(currentQC->roundingMode, qC);
+            initSymInt32QConfigWithQMaxBits(currentQC->roundingMode, qC, currentQC->qMaxBits);
             initSymInt32Quantization(qC, q);
             break;
         default:
@@ -197,9 +239,9 @@ static void deInitLayerOutputs(tensor_t **layerOutputs, size_t modelSize) {
     }
 }
 
-static void initGradTensor(tensor_t *grad, tensor_t *layerOutput) {
+static void initGradTensor(tensor_t *grad, tensor_t *layerOutput, quantization_t *wireQ) {
     shape_t *currentShape = layerOutput->shape;
-    quantization_t *currentQ = layerOutput->quantization;
+    quantization_t *currentQ = (wireQ != NULL) ? wireQ : layerOutput->quantization;
 
     size_t *dims = reserveMemory(currentShape->numberOfDimensions * sizeof(size_t));
     size_t *order = reserveMemory(currentShape->numberOfDimensions * sizeof(size_t));
@@ -225,12 +267,13 @@ static void initGradTensor(tensor_t *grad, tensor_t *layerOutput) {
     case FLOAT32:
         initFloat32Quantization(q);
         break;
-    case SYM_INT32:
+    case SYM_INT32: {
         symInt32QConfig_t *currentQC = currentQ->qConfig;
         symInt32QConfig_t *qC = reserveMemory(sizeof(symInt32QConfig_t));
-        initSymInt32QConfig(currentQC->roundingMode, qC);
+        initSymInt32QConfigWithQMaxBits(currentQC->roundingMode, qC, currentQC->qMaxBits);
         initSymInt32Quantization(qC, q);
         break;
+    }
     default:
         PRINT_ERROR("Unknown QType!");
         exit(1);

@@ -4,98 +4,6 @@
 #include "Distributions.h"
 #include "Tensor.h"
 
-/*! Initializes int32 tensor with given data and shape.
- *
- * \param data: Data of tensor
- * \param dims: Dimensions of tensor
- * \param numberOfDims: Number of dimensions
- * \param sparsity: sparsity_t of tensor
- *
- * \returns Pointer to initialized tensor
- */
-__attribute__((deprecated("Use initTensor(shape, quantization, sparsity) + "
-                          "tensorFillFromFloatBuffer or initDistribution instead. "
-                          "Old API will be removed in Phase 2."))) tensor_t *
-tensorInitInt32(int32_t *data, size_t *dims, size_t numberOfDims, sparsity_t *sparsity);
-/*! Initializes float tensor with given data and shape.
- *
- * \param data: Data of tensor
- * \param dims: Dimensions of tensor
- * \param numberOfDims: Number of dimensions
- * \param sparsity: sparsity_t of tensor
- *
- * \returns Pointer to initialized tensor
- */
-__attribute__((deprecated("Use initTensor(shape, quantization, sparsity) + "
-                          "tensorFillFromFloatBuffer or initDistribution instead. "
-                          "Old API will be removed in Phase 2."))) tensor_t *
-tensorInitFloat(float *data, size_t *dims, size_t numberOfDims, sparsity_t *sparsity);
-/*! Initializes symInt32 tensor with given data and shape.
- *
- * \param data: Data of tensor
- * \param dims: Dimensions of tensor
- * \param numberOfDims: Number of dimensions
- * \param roundingMode: Rounding mode to be used
- * \param sparsity: sparsity_t of tensor
- *
- * \returns Pointer to initialized tensor
- */
-__attribute__((deprecated("Use initTensor(shape, quantization, sparsity) + "
-                          "tensorFillFromFloatBuffer or initDistribution instead. "
-                          "Old API will be removed in Phase 2."))) tensor_t *
-tensorInitSymInt32(float *data, size_t *dims, size_t numberOfDims, roundingMode_t roundingMode,
-                   sparsity_t *sparsity);
-/*! Initializes asym tensor with given data and shape.
- *
- * \param data: Data of tensor
- * \param dims: Dimensions of tensor
- * \param numberOfDims: Number of dimensions
- * \param qBits: Number of bits for qMax
- * \param roundingMode: Rounding mode to be used
- * \param sparsity: sparsity_t of tensor
- *
- * \returns Pointer to initialized tensor
- */
-__attribute__((deprecated("Use initTensor(shape, quantization, sparsity) + "
-                          "tensorFillFromFloatBuffer or initDistribution instead. "
-                          "Old API will be removed in Phase 2."))) tensor_t *
-tensorInitAsym(float *data, size_t *dims, size_t numberOfDims, uint8_t qBits,
-               roundingMode_t roundingMode, sparsity_t *sparsity);
-/*! Initializes tensor to match given quantization.
- *
- * \param data: Data of tensor
- * \param dims: Dimensions of tensor
- * \param numberOfDims: Number of dimensions
- * \param quantization: Quantization to be used
- * \param sparsity: sparsity_t of tensor
- *
- * \returns Pointer to initialized tensor
- */
-__attribute__((deprecated("Use initTensor(shape, quantization, sparsity) + "
-                          "tensorFillFromFloatBuffer or initDistribution instead. "
-                          "Old API will be removed in Phase 2."))) tensor_t *
-tensorInit(float *data, size_t *dims, size_t numberOfDims, quantization_t *quantization,
-           sparsity_t *sparsity);
-/*! Initializes tensor with distribution to match given quantization.
- *
- * \param distributionType: Type of distribution to be used
- * \param data: Data of tensor
- * \param dims: Dimensions of tensor
- * \param numberOfDims: Number of dimensions
- * \param quantization: Quantization to be used
- * \param sparsity: sparsity_t of tensor
- * \param inputFeatures: Number of input features
- * \param outputFeatures: Number of output features
- *
- * \returns Pointer to initialized tensor
- */
-__attribute__((deprecated("Use initTensor(shape, quantization, sparsity) + "
-                          "initDistribution(t, &distribution) instead. "
-                          "Old API will be removed in Phase 2."))) tensor_t *
-tensorInitWithDistribution(distributionType_t distributionType, float *data, size_t *dims,
-                           size_t numberOfDims, quantization_t *quantization, sparsity_t *sparsity,
-                           size_t inputFeatures, size_t outputFeatures);
-
 /*! Initializes a tensor that owns its data buffer.
  *
  * The tensor takes ownership of `shape`, `quantization`, and `sparsity` (if non-NULL).
@@ -175,9 +83,14 @@ tensor_t *gradInitInt32(tensor_t *param, sparsity_t *sparsity);
  * \returns Pointer to initialized gradient tensor
  */
 tensor_t *gradInitFloat(tensor_t *param, sparsity_t *sparsity);
-/*! Initializes symInt32 gradient tensor to match given param tensor.
+/*! Initializes a SYM_INT32 gradient tensor to match the given param tensor,
+ *  at the fixed grad-accumulation width ODT_SYM_GRAD_QMAXBITS (16 — an
+ *  accumulate-soundness ceiling, not a memory saving: SYM_INT32 stays 4
+ *  B/element, #261). Test/research helper — production grad storage defaults
+ *  to FLOAT32 via the weightGradStorage/biasGradStorage knob path (gradInit).
  *
  * \param param: Pointer to param tensor
+ * \param roundingMode: Rounding mode for the grad's qConfig
  * \param sparsity: sparsity_t of tensor
  *
  * \returns Pointer to initialized gradient tensor
@@ -192,6 +105,20 @@ tensor_t *gradInitSymInt32(tensor_t *param, roundingMode_t roundingMode, sparsit
  */
 tensor_t *gradInitAsym(tensor_t *param, uint8_t qBits, roundingMode_t roundingMode,
                        sparsity_t *sparsity);
+/*! Initializes SYM (packed sub-byte) gradient tensor to match given param
+ *  tensor's shape. Use when a layer's grad-storage knob names SYM explicitly
+ *  for memory-constrained packed grad storage (#269, PR3); direct
+ *  quantizationInitSym, no getQLike detour.
+ *
+ * \param param: Pointer to param tensor (supplies the shape to clone)
+ * \param qBits: Sub-byte width of the packed SYM grad
+ * \param roundingMode: Rounding mode for the SYM quantization config
+ * \param sparsity: sparsity_t of tensor
+ *
+ * \returns Pointer to initialized gradient tensor
+ */
+tensor_t *gradInitSym(tensor_t *param, uint8_t qBits, roundingMode_t roundingMode,
+                      sparsity_t *sparsity);
 
 /*! Initializes parameter with given param and graident tensor.
  *
