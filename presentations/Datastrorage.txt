@@ -1,0 +1,58 @@
+DataStorage
+
+//
+// Created by Leo Buron on 20.10.25.
+//
+
+#ifndef ENV5_RUNTIME_DATASTORAGE_H
+#define ENV5_RUNTIME_DATASTORAGE_H
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct Entry {
+    uint8_t *dataPTR; // PTR for starting address in uint8_t array
+    size_t numberOfElements;
+} dataEntry_t;
+\\ Think of this as a bookmark for one single allocation inside the arena.
+
+uint8_t *dataPTR — a pointer to the starting address of this allocation inside the big memory block. It answers: "where does this data begin?"
+size_t numberOfElements — how many elements this allocation holds. It answers: "how big is this allocation?"
+
+Together they describe exactly one chunk of memory — where it starts and how long it is.
+typedef struct DataStorage {
+    uint8_t *data;
+    size_t size;
+    dataEntry_t *entries;
+    size_t numberOfEntries;
+} dataStorage_t;
+\\This is the arena itself — the full picture.
+
+uint8_t *data — pointer to the big raw memory block. This is the actual RAM that was reserved once at startup. Everything gets allocated inside here.
+size_t size — total capacity of the block in bytes. The allocator uses this to make sure it never goes past the end.
+dataEntry_t *entries — an array of bookmarks, one per allocation. Every time something is allocated in the arena, a new dataEntry_t is added here recording where it lives.
+size_t numberOfEntries — how many allocations have been made so far. Starts at 0, increments by 1 with each allocation.
+uint8_t *getDataFromStorage(dataStorage_t storage, void *dataPTR);
+\\Given a pointer, find and return the corresponding data from the storage. Looks up the bookmark in entries and returns the raw bytes.
+dataEntry_t *addDataToStorage(dataStorage_t storage, void *dataPTR, size_t numberOfElements);
+\\Adds a new entry into the arena — records where a new allocation starts (dataPTR) and how big it is (numberOfElements). 
+Creates a new dataEntry_t bookmark and appends it to entries.
+
+#endif // ENV5_RUNTIME_DATASTORAGE_H
+
+
+startup:
+  reserve 320 KB → dataStorage_t.data points to it
+  numberOfEntries = 0
+
+allocate weight tensor (64 bytes):
+  addDataToStorage(..., ptr, 64)
+  entries[0] = { dataPTR = data+0, numberOfElements = 64 }
+  numberOfEntries = 1
+
+allocate bias tensor (16 bytes):
+  addDataToStorage(..., ptr, 16)
+  entries[1] = { dataPTR = data+64, numberOfElements = 16 }
+  numberOfEntries = 2
+
+later, retrieve weight tensor:
+  getDataFromStorage(..., ptr) → returns data+0

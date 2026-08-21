@@ -1,0 +1,30 @@
+Common.h file
+
+*/#ifndef ODT_COMMON_H                  //mean that if the file ODT_COMMON_H not defined , define it and read the file otherwise skip the file
+#define ODT_COMMON_H
+// ... code ...
+#endif*/
+
+*/#define PRINT_DEBUG(str, ...)                                                                      //Logging Macros: Logging means writing down notes while the program runs
+    do {                                                                                           
+        if (DLEVEL >= 3) {                                                                             ##__VA_ARGS__ is a special trick used in macros to handle a variable number of arguments (inputs)
+            printf("\033[0;33m[%s: %s] ", SOURCE_FILE, __FUNCTION__);                                  #define PRINT_INFO(str, ...)  printf(str, ##__VA_ARGS__):This tells the compiler, "Hey, after the first text string (str),
+            printf(str, ##__VA_ARGS__);                                                                the user might type a bunch of other variables. Just grab them all."
+            printf("\033[0m\n");                                                                       __VA_ARGS__: This is a placeholder. The compiler will take whatever extra variables it grabbed in the ... 
+        }                                                                                              and paste them right here
+    } while (false)
+*/
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Rounding.h file 
+
+typedef enum roundingMode { HALF_AWAY, SR_HALF_AWAY } roundingMode_t;                      //An enum is a way to create a custom list of options. Instead of remembering cryptic numbers like 0 and 1, 
+                                                                                           a programmer can use readable text names. This enum creates two rounding strategies:
+                                                                                           Option A: HALF_AWAY (Standard Rounding) This is the normal rounding you learned in school. If a number ends in exactly .5, 
+                                                                                           it rounds away from zero to the nearest whole number.
+                                                                                           Option B: SR_HALF_AWAY (Stochastic Rounding) This is an advanced, randomized rounding method used to prevent statistical bias.
+                                                                                           Before rounding, the computer injects a tiny bit of random "noise" or "jitter" between -0.5 and 0.5
+                                                                                           Why do this?: If you always round 2.5 up to 3, and you do this to millions of data points, your final average will skew slightly
+                                                                                           too high.
+                                                                                           By adding a random tiny shift first, a 2.5 will sometimes round up to 3 and sometimes round down to 2. Over time, the math errors cancel each other out perfectly.

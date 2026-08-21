@@ -1,0 +1,10 @@
+-  size_t is the unsigned integer data type that used for the count
+
+-  int32_t (a signed 32-bit integer), uint8_t (an unsigned 8-bit integer)
+
+-  memcpy(destination, source, numberOfBytes); it copies the numberOfBytes of source to the destination
+
+-  #include<stddef.h> is a standard C library header that defines fundamental system types, constants, and utility macros used across mainstream and 
+embedded C programming such as size_t
+
+-  #include <stdint.h> is a standard C library header that provides fixed-width integer types
