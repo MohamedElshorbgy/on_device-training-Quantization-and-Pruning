@@ -26,6 +26,11 @@ from reportlab.platypus.tableofcontents import TableOfContents
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUTPUT = os.path.join(HERE, "Machine_Learning_and_Deep_Learning_Complete_Guide.pdf")
 
+# Running headers/footers - overridable when this engine is reused for another
+# document (see gen_rigl_implementation_pdf.py).
+HEADER_TEXT = "Machine Learning & Deep Learning - The Complete Guide"
+FOOTER_TEXT = "Beginner to Expert"
+
 PAGE_W, PAGE_H = A4
 MARGIN_L = MARGIN_R = 20 * mm
 MARGIN_T = 18 * mm
@@ -380,6 +385,7 @@ class Book(BaseDocTemplate):
         self.addPageTemplates([PageTemplate(id="main", frames=[frame],
                                             onPage=_decorate)])
         self.current_chapter = ""
+        self._outline_base = None      # level of the first outline entry
 
     def afterFlowable(self, flowable):
         toc = getattr(flowable, "_toc", None)
@@ -389,7 +395,13 @@ class Book(BaseDocTemplate):
             self.canv.bookmarkPage(key)
             self.notify("TOCEntry", (level, text, self.page, key))
             if level <= 1:
-                self.canv.addOutlineEntry(text[:90], key, level=level, closed=(level == 0))
+                # Normalise so the first entry is always outline level 0 - a
+                # document without part dividers starts at chapter level.
+                if self._outline_base is None:
+                    self._outline_base = level
+                lvl = max(0, level - self._outline_base)
+                self.canv.addOutlineEntry(text[:90], key, level=lvl,
+                                          closed=(lvl == 0))
 
 def _decorate(canvas, doc):
     canvas.saveState()
@@ -400,13 +412,12 @@ def _decorate(canvas, doc):
                 PAGE_H - MARGIN_T + 6)
     canvas.setFont("Helvetica", 7.4)
     canvas.setFillColor(C_GREY)
-    canvas.drawString(MARGIN_L, PAGE_H - MARGIN_T + 9,
-                      "Machine Learning & Deep Learning - The Complete Guide")
+    canvas.drawString(MARGIN_L, PAGE_H - MARGIN_T + 9, HEADER_TEXT)
     # footer
     canvas.setStrokeColor(C_LIGHT)
     canvas.line(MARGIN_L, MARGIN_B - 8, PAGE_W - MARGIN_R, MARGIN_B - 8)
     canvas.setFont("Helvetica", 7.4)
-    canvas.drawString(MARGIN_L, MARGIN_B - 16, "Beginner to Expert")
+    canvas.drawString(MARGIN_L, MARGIN_B - 16, FOOTER_TEXT)
     canvas.setFont("Helvetica-Bold", 8.4)
     canvas.setFillColor(C_DARK)
     canvas.drawRightString(PAGE_W - MARGIN_R, MARGIN_B - 16, str(doc.page))
