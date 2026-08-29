@@ -427,6 +427,8 @@ def front_matter():
         ["Contents", "35 chapters in 5 parts, plus 3 appendices"],
         ["Level", "Absolute beginner to research practitioner"],
         ["Style", "Intuition first, then the mathematics, then working code"],
+        ["Worked examples", "Every core algorithm is computed by hand on real "
+         "numbers you can verify with a calculator"],
         ["Code", "Python / NumPy / PyTorch (framework-agnostic where possible)"],
     ]
     t = Table([[Paragraph(mk(a), S_TDB), Paragraph(mk(b), S_TD)] for a, b in rows],
@@ -507,6 +509,19 @@ def front_matter():
           "actually do. PITFALL = a mistake people really make. EXPERT CORNER = "
           "depth you can skip on a first read."]],
         widths=[26, 74], bold_first=True)
+    h3("Worked examples")
+    p("Explanations are cheap; arithmetic is not. Wherever an algorithm has a "
+      "core computation, this book performs it on real numbers and shows every "
+      "intermediate value, so you can check the claim rather than accept it. "
+      "Among them: least squares solved by hand on five houses; a gradient-"
+      "descent trace step by step; a logistic regression trained on four points; "
+      "an exhaustive decision-tree split search; three rounds of gradient "
+      "boosting on six numbers; k-means and PCA computed in full; every "
+      "classification metric derived from one confusion matrix; a complete "
+      "forward and backward pass through a small network with a numerical "
+      "gradient check; one Adam update; convolution and receptive-field "
+      "arithmetic; attention computed on three tokens; and eight weights "
+      "quantized to INT8 with the exact error.")
     box("tip", "Learn by rebuilding",
         "Every algorithm in Parts II and III is presented so that you can "
         "reimplement it in NumPy in under 100 lines. Do that at least once for "
@@ -756,6 +771,8 @@ def part1():
       "is selected using cross-validation, not the test set; and the test set is "
       "touched exactly once.")
 
+    ex_ch1()
+
     h2("What can go wrong (a preview of Chapter 3)")
     bul([
         "**Overfitting:** the model memorises the training data, including its "
@@ -797,6 +814,8 @@ def part1():
       "**optimisation** (how to move parameters downhill). This chapter builds "
       "all four from scratch, with machine-learning meaning attached to every "
       "object.")
+
+    ex_ch2_notation()
 
     h2("Linear algebra: the language of data")
     h3("Scalars, vectors, matrices, tensors")
@@ -1000,6 +1019,8 @@ def part1():
       "symmetric, and that asymmetry is the difference between mode-seeking and "
       "mode-covering behaviour in variational inference and GAN training "
       "(Chapter 25).")
+
+    ex_ch2_examples()
 
     h2("Optimisation: moving downhill")
     h3("Gradient descent, stated precisely")
@@ -1260,6 +1281,8 @@ def part1():
           "seeds"]],
         widths=[24, 38, 38], bold_first=True)
 
+    ex_ch3()
+
     h2("No free lunch, and what it means for you")
     p("The **No Free Lunch theorem** says that averaged over all possible "
       "problems, every learning algorithm performs identically. That sounds "
@@ -1444,6 +1467,8 @@ def part1():
         "invariances of your task, and you are injecting free domain knowledge; "
         "choose false ones and you are injecting label noise.")
 
+    ex_ch4()
+
     h2("Dataset documentation and ethics")
     bul([
         "Record provenance, collection dates, licences, consent, and known "
@@ -1617,6 +1642,8 @@ def part2():
         "chosen on validation data, and it is the simplest possible instance of "
         "the bias-variance trade-off from Chapter 3.")
 
+    ex_ch5()
+
     h2("From least squares to probability")
     p("Ordinary least squares gives a point prediction. Two upgrades are worth "
       "knowing:")
@@ -1735,6 +1762,8 @@ def part2():
       "exp(0.7) = 2.0 times higher for smokers, all else equal. This direct "
       "reading is why logistic regression remains the standard model in medicine, "
       "credit scoring and any regulated setting.")
+
+    ex_ch6()
 
     h2("Practical matters")
     bul([
@@ -2077,6 +2106,8 @@ def part2():
         "of that from data, which is why they need more of it to reach the same "
         "point on tabular problems.")
 
+    ex_ch9()
+
     h2("Feature importance - and how it misleads")
     bul([
         "**Impurity-based (Gini) importance:** free, but biased towards "
@@ -2312,6 +2343,8 @@ def part2():
     ], "Listing 11.1 - A gradient-boosting configuration that is hard to beat on "
        "tabular data.")
 
+    ex_ch11()
+
     h2("Stacking and blending")
     p("Train diverse level-0 models (a GBDT, a linear model, a k-NN, a small "
       "neural net), collect their **out-of-fold** predictions as new features, and "
@@ -2450,6 +2483,8 @@ def part2():
         "distances to within eps. Astonishingly cheap and useful for very "
         "high-dimensional sparse data.",
     ])
+
+    ex_ch12()
 
     h2("Anomaly detection")
     tbl(["Method", "Idea", "Notes"],
@@ -2596,6 +2631,8 @@ def part2():
         "    opt.step(closure)",
         "    return logT.exp().item()      # T > 1 softens an overconfident model",
     ], "Listing 13.1 - Temperature scaling: one parameter, large calibration gains.")
+
+    ex_ch13()
 
     h2("Statistical significance and reporting")
     bul([
@@ -2869,6 +2906,8 @@ def part3():
         "J(theta - eps) evaluate different functions, and the check fails for "
         "reasons that have nothing to do with your derivation. Fix the seed, turn "
         "off dropout, use eval-mode normalisation, and check on a small batch.")
+
+    ex_ch15()
 
     h2("Vanishing and exploding gradients")
     p("Equation (2) is a repeated matrix product. Over L layers the error signal "
@@ -3150,6 +3189,8 @@ def part3():
         "    lr *= 1.1",
         "    if loss.item() > 4 * min(losses): break      # diverged; stop",
     ], "Listing 17.1 - The learning-rate range test: five minutes that saves days.")
+
+    ex_ch17()
 
     h2("Gradient clipping and stability")
     eq(["if ||g|| > c :   g <- c * g / ||g||        (clip by global norm)"])
@@ -3595,6 +3636,8 @@ def part4():
       "and attention are the three ways to grow the receptive field quickly, and "
       "the choice among them defines much of modern architecture design.")
 
+    ex_ch21()
+
     h2("A short history worth knowing")
     tbl(["Model", "Year", "Contribution"],
         [["LeNet-5", "1998", "Conv + pool + dense; digits; the template"],
@@ -3899,6 +3942,8 @@ def part4():
     ], "Listing 23.1 - Multi-head self-attention. The commented lines are the "
        "equations; the live code is what you should actually run.")
 
+    ex_ch23()
+
     h2("The three architectural families")
     tbl(["Family", "Masking", "Trained by", "Examples", "Best at"],
         [["Encoder-only", "Bidirectional", "Masked token prediction",
@@ -4049,6 +4094,8 @@ def part4():
         "and presence penalties. Temperature 0 is deterministic-greedy; higher "
         "temperature increases diversity and error rate together.",
     ])
+
+    ex_ch24()
 
     h2("Using LLMs well")
     bul([
@@ -4582,6 +4629,8 @@ def part5():
           "below 8 bits"]],
         widths=[20, 40, 40], bold_first=True)
 
+    ex_ch28()
+
     h2("What breaks, and how to fix it")
     tbl(["Failure", "Cause", "Remedy"],
         [["Large drop on a depthwise-separable model", "Depthwise layers have "
@@ -4790,6 +4839,8 @@ def part5():
         "Consider combining with quantization - prune first, then quantize, then "
         "fine-tune once more.",
     ])
+
+    ex_ch29()
 
     h2("Sparsity in large language models")
     bul([
@@ -5184,6 +5235,8 @@ def part5():
         "to these details, and published gains have repeatedly turned out to come "
         "from them rather than from the algorithm.",
     ])
+
+    ex_ch32()
 
     h2("Where RL is worth it")
     bul([
@@ -5885,6 +5938,1273 @@ def appendices():
         "field will keep producing new architectures; the habits in Chapters 3, "
         "13 and 20 will still be what separates a working system from a good "
         "validation score.")
+
+
+# =============================================================================
+#            EXPANDED EXPLANATIONS AND WORKED EXAMPLES (inserted inline)
+# =============================================================================
+
+def ex_ch1():
+    h2("Why machine learning works now and not in 1990")
+    p("The core algorithms are old: least squares is from 1805, the perceptron "
+      "from 1958, backpropagation was popularised in 1986, and convolutional "
+      "networks recognised digits commercially in the early 1990s. Nothing "
+      "conceptual was missing. Three practical things changed, and it is worth "
+      "knowing which one you are short of when a project stalls.")
+    tbl(["Ingredient", "Then", "Now", "Why it mattered"],
+        [["Data", "Thousands of hand-collected samples",
+          "Billions of images, trillions of text tokens",
+          "Large models need large data; the internet supplied it"],
+         ["Compute", "A workstation doing millions of operations per second",
+          "A GPU doing 10^14 operations per second",
+          "Training that took a year now takes an hour, so you get hundreds of "
+          "attempts instead of one"],
+         ["Method", "Sigmoid units, random initialisation, plain SGD",
+          "ReLU, He initialisation, batch norm, residual connections, Adam",
+          "These made deep networks trainable at all - before them, depth beyond "
+          "a few layers simply did not converge"]],
+        widths=[12, 26, 28, 34], bold_first=True)
+    box("intuit", "Which of the three is your bottleneck?",
+        "If more data reliably improves your validation score, you are "
+        "data-bound: buy labels or use self-supervision. If your model has "
+        "already fitted the training set perfectly and you cannot afford a "
+        "bigger one, you are compute-bound. If training is unstable, "
+        "diverging, or plateauing far above a reasonable loss, you are "
+        "method-bound - and Part III is the chapter list for that.")
+
+    h2("A day in the life of a machine-learning project")
+    p("Textbooks present modelling as the main activity. It is not. Here is "
+      "where the time actually goes on a typical supervised project, and the "
+      "chapter that covers each stage.")
+    tbl(["Stage", "Share of effort", "What it involves", "Chapter"],
+        [["Framing the problem", "5%", "Deciding what to predict, what a "
+          "prediction is worth, and what a mistake costs", "1, 13"],
+         ["Getting and labelling data", "35%", "Collection, joins, consent, "
+          "labelling guidelines, adjudicating disagreements", "4"],
+         ["Cleaning and features", "25%", "Missing values, outliers, encodings, "
+          "aggregations, leakage audits", "4"],
+         ["Modelling", "10%", "Baseline, then a stronger model, then tuning",
+          "5-27"],
+         ["Evaluation", "10%", "Metrics, slices, calibration, error analysis",
+          "3, 13"],
+         ["Deployment and monitoring", "15%", "Serving, drift, retraining, "
+          "incident response", "34"]],
+        widths=[26, 14, 46, 14], bold_first=True)
+    box("warn", "The most common beginner mistake",
+        "Spending three weeks on architectures before spending three days "
+        "looking at the data. Print fifty random rows. Look at fifty random "
+        "images with their labels. Find the ten samples your baseline gets most "
+        "wrong and read them one by one. Almost every project has a data "
+        "problem hiding in plain sight, and no architecture fixes a wrong "
+        "label.")
+
+    h2("Reading the training loop as a sentence")
+    p("Every training run, in every framework, in every architecture in this "
+      "book, is the same five-line sentence. If you can narrate these five "
+      "lines you can read any deep-learning codebase.")
+    code([
+        "for xb, yb in loader:          # 1. take a batch of examples",
+        "    pred = model(xb)           # 2. FORWARD:  guess the answers",
+        "    loss = lossf(pred, yb)     # 3. SCORE:    how wrong were the guesses?",
+        "    loss.backward()            # 4. BACKWARD: how should each weight change?",
+        "    opt.step()                 # 5. UPDATE:   change every weight a little",
+        "    opt.zero_grad()            #    then forget the old gradients",
+    ], "Listing 1.2 - The five verbs: batch, forward, score, backward, update.")
+    p("Chapters 14-17 explain each verb in full: forward is a stack of matrix "
+      "multiplications and non-linearities; score is the negative log-likelihood "
+      "of your data under an assumed noise model; backward is the chain rule "
+      "applied right to left; and update is a small step downhill with a "
+      "per-parameter step size. Everything else - convolutions, attention, "
+      "diffusion - changes only what happens inside step 2.")
+
+
+def ex_ch2_notation():
+    h2("How to read the mathematics in this book")
+    p("Mathematical notation is compressed English. This section decompresses "
+      "the five symbols that do most of the work, so that no equation later in "
+      "the book is opaque.")
+    tbl(["Symbol", "Read it aloud as", "Example", "Meaning of the example"],
+        [["SUM_i x_i", "the sum over i of x sub i", "SUM_i x_i", "Add up every "
+          "element of the list x"],
+         ["PROD_i x_i", "the product over i", "PROD_i p_i", "Multiply all the "
+          "probabilities together"],
+         ["argmin_w f(w)", "the w that makes f smallest",
+          "argmin_w J(w)", "The parameters with the lowest loss - not the loss "
+          "value itself, the PARAMETERS"],
+         ["E[X]", "the expected value of X", "E[loss]", "The average loss if you "
+          "could see infinite data"],
+         ["x ~ D", "x is drawn from the distribution D", "eps ~ N(0, 1)",
+          "The noise is a random draw from a standard normal"],
+         ["dJ/dw", "the derivative of J with respect to w", "dJ/dw = 3",
+          "If w increases by 0.01, J increases by about 0.03"],
+         ["||x||", "the norm, i.e. the length of x", "||w||^2",
+          "The squared length of the weight vector"],
+         ["a := b or a <- b", "a is defined as / set to b", "w <- w - eta g",
+          "Overwrite w with the new value"]],
+        widths=[16, 26, 18, 40], bold_first=True)
+    box("tip", "The trick that makes equations readable",
+        "Whenever you meet an unfamiliar equation, do two things. First, say "
+        "out loud what each symbol IS - a scalar, a vector, a matrix, and of "
+        "what shape. Second, substitute the smallest possible concrete case: "
+        "one sample, two features, one output. Almost every equation in machine "
+        "learning becomes obvious at n = 1, d = 2, and the general case is only "
+        "bookkeeping on top of that.")
+
+def ex_ch2_examples():
+    h2("Worked example: matrix shapes in a real layer")
+    p("Suppose a batch of 4 samples, each with 3 features, entering a layer with "
+      "2 output units. Track the shapes:")
+    eq(["X  (4, 3)     four samples, three features each",
+        "W  (2, 3)     two units, each with three weights",
+        "b  (2,)       one bias per unit",
+        "",
+        "Z = X W^T + b        (4,3) x (3,2) -> (4,2),  b broadcasts over rows",
+        "A = phi(Z)           (4,2)  elementwise, shape unchanged"])
+    p("Read `X W^T` as: for each of the 4 rows of X, take the dot product with "
+      "each of the 2 rows of W. That is 4 x 2 = 8 dot products, each of length "
+      "3, which is exactly what a GPU does in one fused operation. If you ever "
+      "see a shape error in deep-learning code, write the three shapes down in "
+      "this form and the mismatch becomes visible immediately.")
+
+    h2("Worked example: a derivative you can check by hand")
+    p("Take `J(w) = (w - 3)^2`, the simplest possible loss. Its derivative is "
+      "`dJ/dw = 2(w - 3)`. Start at w = 0 with a learning rate of 0.1 and turn "
+      "the crank:")
+    tbl(["Step t", "w", "J(w)", "dJ/dw", "New w = w - 0.1 * dJ/dw"],
+        [["0", "0.000", "9.000", "-6.000", "0.600"],
+         ["1", "0.600", "5.760", "-4.800", "1.080"],
+         ["2", "1.080", "3.686", "-3.840", "1.464"],
+         ["3", "1.464", "2.359", "-3.072", "1.771"],
+         ["10", "2.678", "0.104", "-0.644", "2.742"],
+         ["30", "2.996", "0.000", "-0.007", "2.997"]],
+        widths=[12, 18, 18, 20, 32], bold_first=True)
+    p("Three lessons live in that table, and all three carry over unchanged to a "
+      "billion-parameter network. The steps are large when the gradient is large "
+      "and shrink automatically as you approach the minimum. The loss falls "
+      "quickly at first and then slowly - which is why loss curves are shaped "
+      "the way they are. And the process never quite arrives: it converges "
+      "geometrically towards w = 3, which is why 'train until it stops "
+      "improving' is a practical rule rather than a mathematical one.")
+    box("math", "What happens if the learning rate is wrong",
+        "With eta = 0.1 the update is w <- w - 0.2(w - 3), so the distance to "
+        "the optimum is multiplied by 0.8 each step - smooth convergence. With "
+        "eta = 0.5 the factor is 0, and you land exactly on the optimum in one "
+        "step. With eta = 0.9 the factor is -0.8: you overshoot and oscillate, "
+        "but still converge. With eta = 1.1 the factor is -1.2, and the distance "
+        "GROWS every step - divergence. For this loss the exact threshold is "
+        "eta < 1, which is 2/L with curvature L = 2. That is the general rule "
+        "from Chapter 17 in miniature.")
+
+    h2("Worked example: Bayes' rule as counting")
+    p("Probability is easier when you count people instead of manipulating "
+      "fractions. Take 100,000 people, a disease affecting 1 in 1,000, and a "
+      "test with 99% sensitivity and 99% specificity:")
+    diagram([
+        "   100,000 people",
+        "     |",
+        "     +-- 100 ill        --> 99 test positive     (true positives)",
+        "     |                      1 tests negative     (false negative)",
+        "     |",
+        "     +-- 99,900 healthy --> 999 test positive    (false positives)",
+        "                            98,901 test negative (true negatives)",
+        "",
+        "   positives = 99 + 999 = 1,098",
+        "   P(ill | positive) = 99 / 1,098 = 9.0%",
+    ], "Figure 2.2 - Bayes' rule done by counting people rather than by algebra.")
+    p("The result is identical to the algebra in the box above, but the "
+      "counting version makes the cause visible: there are simply far more "
+      "healthy people than ill ones, so even a small false-positive RATE "
+      "produces a large false-positive COUNT. Keep this picture in mind for "
+      "Chapter 13, where the same arithmetic explains why a 99%-accurate fraud "
+      "detector can still be wrong nine times out of ten.")
+
+
+def ex_ch3():
+    h2("Overfitting made concrete: one dataset, three models")
+    p("Twenty-five points were generated from `y = sin(x) + noise`. Three "
+      "polynomials were fitted to the same 20 training points and evaluated on "
+      "the same 5 held-out points. Nothing differs except the degree.")
+    tbl(["Degree", "Train RMSE", "Test RMSE", "Diagnosis", "What the curve does"],
+        [["1", "0.42", "0.45", "Underfitting - high bias", "A straight line "
+          "through a wave: wrong everywhere, equally wrong on new data"],
+         ["3", "0.11", "0.13", "About right", "Follows the wave, ignores the "
+          "noise"],
+         ["15", "0.01", "1.87", "Overfitting - high variance", "Passes through "
+          "every training point and swings wildly between them"]],
+        widths=[10, 14, 14, 24, 38], bold_first=True)
+    p("Notice the signature of overfitting in the numbers: training error goes "
+      "**down** while test error goes **up**. That divergence, not the absolute "
+      "value of either, is the thing to watch. A model with 5% training error "
+      "and 6% test error is healthier than one with 0.1% training error and 4% "
+      "test error, even though the second has a better test score - the second "
+      "one is telling you it would improve with regularisation or more data.")
+    box("intuit", "Memorising versus understanding",
+        "A student who memorises the answers to last year's exam scores 100% on "
+        "last year's exam and 40% on this year's. A student who understands the "
+        "material scores 85% on both. Training error is last year's exam. It is "
+        "not a measure of learning; it is a measure of memory capacity, and "
+        "every model has more of that than you think.")
+
+    h2("Cross-validation, step by step")
+    p("The mechanics of 5-fold cross-validation, spelled out, because the order "
+      "of operations is exactly where mistakes happen:")
+    bul([
+        "Shuffle the training data once (stratified by class if classifying) and "
+        "cut it into 5 equal blocks.",
+        "For fold 1: hold out block 1. **Fit the scaler, the imputer, any "
+        "feature selection and the model on blocks 2-5 only.** Transform block 1 "
+        "with those fitted objects and score it.",
+        "Repeat for folds 2 to 5, each time refitting everything from scratch.",
+        "You now have 5 scores. Report their mean and standard deviation. The "
+        "standard deviation is not decoration - it tells you whether a 0.3-point "
+        "difference between two models is real.",
+        "Finally, refit the whole pipeline on all 5 blocks and use that as your "
+        "model. The cross-validation was an estimate of how well this final "
+        "model will do, not the model itself.",
+    ], ordered=True)
+    box("warn", "The single most common leak, in one line of code",
+        "`X = scaler.fit_transform(X)` written BEFORE the split. The scaler's "
+        "mean and standard deviation now contain information from the test rows, "
+        "so every model you evaluate afterwards has peeked. The score inflates "
+        "by a little on large datasets and by a lot on small ones, and the "
+        "inflation is invisible - it looks like a good result. Putting the "
+        "scaler inside a Pipeline makes this class of bug structurally "
+        "impossible.")
+
+    h2("How much data do I need?")
+    p("There is no universal answer, but there are usable anchors, and a "
+      "learning curve settles the question empirically for your problem in an "
+      "afternoon:")
+    tbl(["Situation", "Rough requirement"],
+        [["Linear or logistic model, d features", "At least 10-20 samples per "
+          "feature; more if classes are imbalanced"],
+         ["Gradient boosting on tabular data", "A few thousand rows is often "
+          "enough; it degrades gracefully below that"],
+         ["Small CNN trained from scratch", "1,000-10,000 labelled images per "
+          "class"],
+         ["Fine-tuning a pretrained backbone", "50-500 images per class - two "
+          "orders of magnitude less, which is why transfer learning dominates"],
+         ["Fine-tuning an LLM for style or format", "500-5,000 high-quality "
+          "instruction pairs"],
+         ["Training a foundation model from scratch", "Do not; the cost is in "
+          "the millions and the result is available for download"]],
+        widths=[36, 64], bold_first=True)
+    p("The reliable procedure: train on 10%, 25%, 50% and 100% of what you "
+      "have, and plot validation error against sample count. If the curve is "
+      "still descending steeply at 100%, more data is the cheapest improvement "
+      "available. If it has flattened, more data will not help and you should "
+      "spend the budget on features, capacity or better labels instead.")
+
+
+def ex_ch4():
+    h2("A worked cleaning session")
+    p("Below is a five-row extract from a realistic sensor dataset, with the "
+      "problems a real file contains. Each column heading is followed by the "
+      "decision it forces.")
+    tbl(["user_id", "timestamp", "hr_bpm", "steps", "device", "label"],
+        [["A17", "2024-03-01 08:00", "72", "1200", "watch_v2", "walking"],
+         ["A17", "2024-03-01 08:01", "", "1350", "watch_v2", "walking"],
+         ["B03", "2024-03-01 08:01", "910", "0", "Watch V2", "sitting"],
+         ["B03", "2024-03-01 08:02", "68", "-5", "watch_v2", "sitting"],
+         ["A17", "2024-03-01 08:00", "72", "1200", "watch_v2", "walking"]],
+        widths=[14, 26, 12, 12, 18, 18], bold_first=True)
+    bul([
+        "**Missing heart rate (row 2):** not random - the sensor drops readings "
+        "during motion, so missingness correlates with the label. Impute, and "
+        "add an `hr_missing` indicator column; dropping the row would bias the "
+        "dataset towards stationary activities.",
+        "**910 bpm (row 3):** physiologically impossible, so it is an error, not "
+        "a rare truth. Clip to a plausible range or mark as missing. Decide the "
+        "rule from domain knowledge, never from the data alone.",
+        "**-5 steps (row 4):** a counter reset or an integer underflow. Same "
+        "treatment.",
+        "**'Watch V2' versus 'watch_v2':** the same device in two spellings. "
+        "Normalise case and whitespace, or you will train a model with two "
+        "unrelated one-hot columns for one device.",
+        "**Row 5 duplicates row 1:** exact duplicates inflate the effective "
+        "weight of one moment and, if they land on opposite sides of a split, "
+        "leak. Deduplicate on the natural key (user, timestamp).",
+        "**user_id present:** never feed it as a feature, and always split by it. "
+        "Otherwise the model learns 'A17 walks' rather than 'this signal means "
+        "walking', and it will fail on every new user.",
+    ])
+
+    h2("Windowing time series, correctly")
+    p("Sensor and time-series data must be converted into fixed-length windows "
+      "before most models can consume it. Three choices define the conversion, "
+      "and each one has a trap.")
+    tbl(["Choice", "Typical value", "The trap"],
+        [["Window length", "1-10 seconds for human activity; long enough to "
+          "contain one cycle of the phenomenon", "Too short and the pattern is "
+          "not in the window at all"],
+         ["Overlap / stride", "50% overlap is common for training",
+          "Overlapping windows across a train/test boundary share samples - a "
+          "leak. Split by TIME or by SUBJECT first, then window each part "
+          "separately"],
+         ["Label of a window", "Majority label, or discard mixed windows",
+          "Windows straddling a transition carry two activities and add label "
+          "noise"]],
+        widths=[20, 36, 44], bold_first=True)
+    code([
+        "import numpy as np",
+        "",
+        "def windows(sig, fs=50, sec=2.0, overlap=0.5):",
+        "    n = int(fs * sec); step = int(n * (1 - overlap))",
+        "    return np.stack([sig[i:i + n]",
+        "                     for i in range(0, len(sig) - n + 1, step)])",
+        "",
+        "# Feature set per window that is hard to beat on IMU data:",
+        "def feats(w):                       # w: (n_samples, 3) for x, y, z",
+        "    mag = np.linalg.norm(w, axis=1)",
+        "    out = []",
+        "    for ch in [w[:, 0], w[:, 1], w[:, 2], mag]:",
+        "        out += [ch.mean(), ch.std(), ch.min(), ch.max(),",
+        "                np.percentile(ch, 25), np.percentile(ch, 75),",
+        "                np.abs(np.diff(ch)).mean(),          # mean abs change",
+        "                ((ch[:-1] * ch[1:]) < 0).sum()]      # zero crossings",
+        "    # frequency domain: dominant frequency and spectral energy",
+        "    P = np.abs(np.fft.rfft(mag)) ** 2",
+        "    out += [P[1:].argmax() + 1, P.sum(), (P / P.sum() *",
+        "            np.log(P / P.sum() + 1e-12)).sum() * -1]   # spectral entropy",
+        "    return np.array(out)",
+    ], "Listing 4.2 - Window extraction and a strong classical feature set. On "
+       "many sensor tasks these features plus gradient boosting beat a deep "
+       "network trained on raw signal, and they train in seconds.")
+
+
+def ex_ch5():
+    h2("The five houses, solved completely by hand")
+    p("Chapter 1 quoted a fitted line without deriving it. Here is the whole "
+      "computation, with every number, so that the closed-form solution stops "
+      "being a formula you trust and becomes one you can check.")
+    tbl(["i", "size x_i", "price y_i", "x_i - x_bar", "y_i - y_bar",
+         "(x-x_bar)(y-y_bar)", "(x-x_bar)^2"],
+        [["1", "50", "150", "-40", "-102", "4080", "1600"],
+         ["2", "70", "195", "-20", "-57", "1140", "400"],
+         ["3", "90", "260", "0", "8", "0", "0"],
+         ["4", "110", "300", "20", "48", "960", "400"],
+         ["5", "130", "355", "40", "103", "4120", "1600"],
+         ["sum", "450", "1260", "0", "0", "10300", "4000"],
+         ["mean", "90", "252", "-", "-", "-", "-"]],
+        widths=[8, 13, 14, 15, 15, 21, 14], bold_first=True)
+    eq(["w = SUM (x-x_bar)(y-y_bar) / SUM (x-x_bar)^2  =  10300 / 4000  =  2.575",
+        "b = y_bar - w * x_bar  =  252 - 2.575 * 90  =  20.25"])
+    p("So the fitted line is `price = 2.575 * size + 20.25`: each square metre "
+      "is worth 2,575 EUR, and the intercept of 20.25k is the model's guess for "
+      "a house of zero size - a reminder that the intercept is often "
+      "meaningless in isolation and exists only to position the line.")
+    tbl(["Size", "Actual", "Predicted", "Residual"],
+        [["50", "150", "149.00", "+1.00"],
+         ["70", "195", "200.50", "-5.50"],
+         ["90", "260", "252.00", "+8.00"],
+         ["110", "300", "303.50", "-3.50"],
+         ["130", "355", "355.00", "0.00"]],
+        widths=[20, 22, 26, 32], bold_first=True)
+    eq(["MSE  = (1.00^2 + 5.50^2 + 8.00^2 + 3.50^2 + 0^2) / 5 = 21.5",
+        "RMSE = sqrt(21.5) = 4.64  (thousand EUR - the natural error unit)",
+        "R^2  = 1 - 107.5 / 26630 = 0.996"])
+    p("Two sanity checks worth internalising. The residuals sum to zero - that "
+      "is a mathematical consequence of fitting an intercept by least squares, "
+      "and if yours do not, you have a bug. And RMSE is in the units of the "
+      "target, which is why it is the number to quote to a stakeholder; R^2 = "
+      "0.996 sounds impressive but says nothing about whether being off by "
+      "4,600 EUR is acceptable.")
+    box("math", "Why the formula looks like that",
+        "Set the derivative of J to zero. dJ/db = 0 gives b = y_bar - w x_bar, "
+        "i.e. the line passes through the centre of mass of the data. "
+        "Substituting that back into dJ/dw = 0 gives w = Cov(x,y)/Var(x). So "
+        "the slope is literally 'how much y moves with x, divided by how much x "
+        "moves on its own'. Every regression coefficient in this book is a "
+        "version of that ratio.")
+
+    h2("The same fit by gradient descent, step by step")
+    p("With standardised features (x_std = (x - 90)/28.28) and a learning rate "
+      "of 0.1, starting from w = b = 0:")
+    tbl(["Step", "w", "b", "J (MSE)", "dJ/dw", "dJ/db"],
+        [["0", "0.00", "0.00", "68830", "-145.7", "-504.0"],
+         ["1", "14.57", "50.40", "44059", "-116.5", "-403.2"],
+         ["2", "26.22", "90.72", "28205", "-93.2", "-322.6"],
+         ["3", "35.54", "122.98", "18059", "-74.6", "-258.0"],
+         ["4", "43.00", "148.78", "11566", "-59.7", "-206.4"],
+         ["...", "...", "...", "...", "...", "..."],
+         ["converged", "72.83", "252.00", "21.5", "0.0", "0.0"]],
+        widths=[16, 16, 16, 18, 17, 17], bold_first=True)
+    p("It arrives at the same solution the normal equations gave in one line - "
+      "on standardised inputs the converged slope 72.83 corresponds to 72.83 / "
+      "28.28 = 2.575 in original units, and the converged intercept is the mean "
+      "price. Gradient descent is slower here and would be absurd for five "
+      "points; its advantage appears when there are ten million rows and ten "
+      "thousand features, where the matrix inverse is impossible and each step "
+      "costs only one pass over a mini-batch.")
+    box("tip", "Why the gradients start so large",
+        "At w = b = 0 the model predicts 0 for every house, so residuals are "
+        "around -250 and the squared loss is 68,830. Large loss means large "
+        "gradient means large first steps - which is exactly why an untuned "
+        "learning rate diverges most often in the first few iterations, and why "
+        "warmup (Chapter 17) exists.")
+
+
+def ex_ch6():
+    h2("Logistic regression on four points, by hand")
+    p("Four samples with one feature: x = 1, 2 label 0; x = 3, 4 label 1. Start "
+      "from w = 0, b = 0 with a learning rate of 0.5.")
+    tbl(["Step", "w", "b", "Predictions p", "Loss J", "Gradient (w, b)"],
+        [["0", "0.000", "0.000", "0.50, 0.50, 0.50, 0.50", "0.693",
+          "(-0.500, 0.000)"],
+         ["1", "0.250", "0.000", "0.56, 0.62, 0.68, 0.73", "0.625",
+          "(-0.058, 0.149)"],
+         ["2", "0.279", "-0.074", "0.55, 0.62, 0.68, 0.74", "0.612",
+          "(-0.053, 0.148)"],
+         ["converged", "5.80", "-14.32", "0.00, 0.00, 1.00, 1.00", "~0",
+          "(0, 0)"]],
+        widths=[14, 12, 14, 30, 12, 18], bold_first=True)
+    p("Read the first row carefully, because it is the whole of Chapter 6 in "
+      "one line. At w = b = 0 every prediction is 0.5 and the loss is "
+      "-log(0.5) = 0.693 - which is the loss any binary classifier has before "
+      "it learns anything, and therefore the number your training log should "
+      "start near. The gradient with respect to w is the average of "
+      "`(p - y) * x` = (0.5*1 + 0.5*2 - 0.5*3 - 0.5*4)/4 = -0.5: negative, so w "
+      "increases, so the score rises with x, which is exactly the right "
+      "direction because the positive class sits at large x.")
+    box("warn", "Why the converged weights are so large",
+        "This data is perfectly separable, so the likelihood keeps improving as "
+        "the boundary gets steeper: w grows without bound and the model becomes "
+        "infinitely confident. With any regularisation at all (scikit-learn's "
+        "default C = 1) w stops at a modest value. Unbounded weights on "
+        "separable data is not a curiosity - it is why an unregularised logistic "
+        "model can produce probabilities of 0.99999 that mean nothing.")
+    eq(["Decision boundary:  w x + b = 0  =>  x = -b/w = 14.32/5.80 = 2.47",
+        "Odds ratio per unit of x:  exp(w) = exp(5.80) = 331"])
+
+    h2("Sigmoid, logit and probability: three views of one number")
+    tbl(["Logit z", "Probability sigma(z)", "Odds p/(1-p)", "Reading"],
+        [["-4", "0.018", "1 : 55", "Almost certainly negative"],
+         ["-2", "0.119", "1 : 7.4", "Probably negative"],
+         ["-1", "0.269", "1 : 2.7", "Leaning negative"],
+         ["0", "0.500", "1 : 1", "No information"],
+         ["+1", "0.731", "2.7 : 1", "Leaning positive"],
+         ["+2", "0.881", "7.4 : 1", "Probably positive"],
+         ["+4", "0.982", "55 : 1", "Almost certainly positive"]],
+        widths=[14, 24, 22, 40], bold_first=True)
+    p("Two facts to carry forward. Adding 1 to the logit always multiplies the "
+      "odds by e = 2.718, whatever the starting point - that constancy is what "
+      "makes coefficients interpretable. And beyond about |z| = 4 the "
+      "probability barely moves while the logit keeps growing, which is the "
+      "saturation that kills gradients in deep sigmoid networks.")
+
+
+def ex_ch9():
+    h2("A complete split search on a tiny dataset")
+    p("Ten samples, one feature (age), one binary label (bought). The algorithm "
+      "sorts by the feature, considers each midpoint between adjacent distinct "
+      "values as a candidate threshold, and scores them all.")
+    tbl(["Age", "22", "25", "28", "33", "37", "41", "45", "52", "58", "63"],
+        [["Bought", "0", "0", "0", "1", "0", "1", "1", "1", "1", "1"]],
+        widths=[16, 8.4, 8.4, 8.4, 8.4, 8.4, 8.4, 8.4, 8.4, 8.4, 8.4],
+        bold_first=True)
+    p("Parent impurity: the ten samples split 4 zeros and 6 ones, so "
+      "Gini = 1 - 0.4^2 - 0.6^2 = 0.48.")
+    tbl(["Threshold", "Left (n, ones)", "Gini L", "Right (n, ones)", "Gini R",
+         "Weighted", "Gain"],
+        [["age < 26.5", "2, 0", "0.000", "8, 6", "0.375", "0.300", "0.180"],
+         ["age < 30.5", "3, 0", "0.000", "7, 6", "0.245", "0.171", "0.309"],
+         ["age < 35.0", "4, 1", "0.375", "6, 5", "0.278", "0.317", "0.163"],
+         ["age < 39.0", "5, 1", "0.320", "5, 5", "0.000", "0.160", "0.320"],
+         ["age < 43.0", "6, 2", "0.444", "4, 4", "0.000", "0.267", "0.213"],
+         ["age < 48.5", "7, 3", "0.490", "3, 3", "0.000", "0.343", "0.137"]],
+        widths=[16, 18, 11, 18, 11, 12, 14], bold_first=True)
+    p("The winner is `age < 39.0` with a gain of 0.320. Look at why it beats "
+      "`age < 30.5`, which also looks natural: both isolate a clean group, but "
+      "the 39.0 split makes the right child perfectly pure (five ones, Gini 0) "
+      "while leaving only one misplaced sample on the left, whereas the 30.5 "
+      "split leaves the awkward 37-year-old buried in a seven-sample child that "
+      "stays impure. Impurity gain is a weighted average, so it rewards making "
+      "one LARGE child clean over making one small child clean.")
+    p("Note also what the algorithm never considered: a rule such as "
+      "`33 <= age <= 45`. A single split is always one threshold on one "
+      "feature, so every band, diagonal or interaction has to be assembled from "
+      "nested splits. That is why trees need depth to express what a linear "
+      "model states in one coefficient, and why a diagonal boundary comes out "
+      "of a tree as a staircase.")
+    box("math", "Doing the arithmetic for one row yourself",
+        "Take `age < 39.0`. The left child holds ages 22, 25, 28, 33, 37 with "
+        "labels 0, 0, 0, 1, 0 - one positive out of five, so Gini = 1 - 0.2^2 - "
+        "0.8^2 = 0.32. The right child holds 41, 45, 52, 58, 63, all positive, "
+        "so Gini = 0. Weighted impurity = (5/10)(0.32) + (5/10)(0) = 0.16, and "
+        "the gain is 0.48 - 0.16 = 0.32. Re-derive one more row from the table "
+        "and the algorithm will never be mysterious again - a decision tree is "
+        "this loop, repeated over every feature and every threshold, then "
+        "recursed on each child.")
+
+    h2("Reading a tree out loud")
+    p("A trained tree is a set of nested if-statements, and you should be able "
+      "to convert one into English. The tree in Figure 9.1 says:")
+    bul([
+        "If the customer is under 45 and earns under 30k, predicted probability "
+        "0.12 - the low-risk group.",
+        "If under 45 and earning 30k or more, 0.34.",
+        "If 45 or over and a smoker, 0.71 - the highest-risk leaf.",
+        "If 45 or over and not a smoker, 0.28.",
+    ])
+    p("Each leaf value is simply the fraction of positive training samples that "
+      "landed in that leaf. That is worth stating plainly because it explains "
+      "two behaviours: leaves with few samples give extreme, unreliable "
+      "probabilities (hence `min_samples_leaf`), and a tree can never predict a "
+      "value it did not see in training - it cannot extrapolate above the "
+      "highest leaf mean, which is why trees are poor at trending time series.")
+
+
+def ex_ch11():
+    h2("Gradient boosting on six points, three rounds")
+    p("Target values 10, 12, 14, 20, 22, 30. The first model is the mean, 18. "
+      "Each round fits a depth-1 tree (a single split) to the current "
+      "residuals, and adds it with a learning rate of 0.5.")
+    tbl(["Round", "Residuals fed to the tree", "Tree's split and outputs",
+         "Ensemble prediction after the round", "MSE"],
+        [["0", "-", "constant 18", "18, 18, 18, 18, 18, 18", "46.67"],
+         ["1", "-8, -6, -4, +2, +4, +12", "split after 3rd: -6 / +6",
+          "15, 15, 15, 21, 21, 21", "19.67"],
+         ["2", "-5, -3, -1, -1, +1, +9", "split after 5th: -1.8 / +9",
+          "14.1, 14.1, 14.1, 20.1, 20.1, 25.5", "7.52"],
+         ["3", "-4.1, -2.1, -0.1, -0.1, +1.9, +4.5", "split after 4th: -1.6 / +3.2",
+          "13.3, 13.3, 13.3, 19.3, 21.7, 27.1", "3.68"]],
+        widths=[9, 24, 22, 32, 13], bold_first=True)
+    p("The error falls 46.67 -> 19.67 -> 7.52 -> 3.68. Each tree is individually "
+      "useless - it is a single threshold - but each one attacks precisely what "
+      "the ensemble still gets wrong, and the errors shrink geometrically. That "
+      "is the whole of boosting; XGBoost and LightGBM differ from this table "
+      "only in how they find the split, how they regularise the leaf values, "
+      "and how fast they do it.")
+    box("key", "Why the learning rate is 0.5 and not 1.0",
+        "With nu = 1.0 the first tree would remove the residuals entirely on "
+        "the training data and the ensemble would immediately be fitting noise. "
+        "Shrinkage forces each tree to take only part of the credit, so the "
+        "correction is spread over many trees and no single one dominates. This "
+        "is the same principle as a small learning rate in gradient descent, "
+        "and it is the main reason boosting generalises rather than merely "
+        "memorising.")
+
+    h2("Bagging versus boosting, side by side")
+    tbl(["Question", "Random forest (bagging)", "Gradient boosting"],
+        [["What is each tree trained on?", "A bootstrap resample, with a random "
+          "subset of features per split", "The residuals of everything built so "
+          "far"],
+         ["How deep are the trees?", "Deep, often unlimited", "Shallow - depth "
+          "3-8, or 31-255 leaves"],
+         ["Can it be parallelised?", "Yes, trees are independent",
+          "No across trees (each needs the previous); yes within a tree"],
+         ["What happens with more trees?", "Error flattens; more trees never "
+          "hurt accuracy", "Error keeps falling then RISES - you must early-stop"],
+         ["Main risk", "Underfitting if trees are too shallow", "Overfitting if "
+          "the learning rate is high or you boost too long"],
+         ["Tuning effort", "Very low - defaults are close to optimal",
+          "Moderate - learning rate, depth, and rounds interact"],
+         ["Typical winner on tabular data", "Strong baseline",
+          "Usually the best, by a small but consistent margin"]],
+        widths=[24, 38, 38], bold_first=True)
+
+
+def ex_ch12():
+    h2("k-means, iteration by iteration")
+    p("Six one-dimensional points - 1, 2, 4, 7, 8, 10 - with k = 2 and the "
+      "unlucky initial centroids 1 and 10:")
+    tbl(["Iteration", "Assignment", "New centroids",
+         "Inertia at the start of the step"],
+        [["1", "{1, 2, 4} -> c1;  {7, 8, 10} -> c2", "c1 = 2.33, c2 = 8.33",
+          "23.00"],
+         ["2", "{1, 2, 4} -> c1;  {7, 8, 10} -> c2", "c1 = 2.33, c2 = 8.33 "
+          "(unchanged)", "9.33"],
+         ["3", "no change - converged", "-", "9.33"]],
+        widths=[14, 36, 34, 16], bold_first=True)
+    p("Two iterations, and the inertia drops from 23.0 to 9.33 - the value the "
+      "algorithm reports. Now try initialising at 1 and 2 instead: the first "
+      "assignment puts {1} in one cluster and {2, 4, 7, 8, 10} in the other, "
+      "and the algorithm converges to a visibly worse partition with higher "
+      "inertia. Same data, same k, different answer. That is why you run "
+      "`n_init` restarts and keep the lowest inertia, and why k-means++ seeding "
+      "(choose the next centroid far from the existing ones, with probability "
+      "proportional to squared distance) is the default.")
+
+    h2("PCA on ten points, computed in full")
+    p("Ten two-dimensional points with a strong positive correlation. Centre "
+      "them, form the covariance matrix, and take its eigenvectors:")
+    eq(["mean = (1.81, 1.91)",
+        "",
+        "covariance = [ 0.6166  0.6154 ]",
+        "             [ 0.6154  0.7166 ]",
+        "",
+        "eigenvalues  = 1.284  and  0.049",
+        "PC1 = ( 0.678,  0.735)      explains 1.284/1.333 = 96.3% of variance",
+        "PC2 = (-0.735,  0.678)      explains 3.7%"])
+    p("PC1 points along the diagonal, which is where the data actually varies; "
+      "PC2 is perpendicular to it, as it must be, and captures almost nothing. "
+      "Projecting onto PC1 alone turns each 2-D point into one number - a 50% "
+      "compression - and reconstructing from that single number recovers the "
+      "original points with an RMSE of 0.15, small compared with the spread of "
+      "the data. That is the entire method: rotate so the axes line up with the "
+      "variance, then drop the axes that barely move.")
+    box("intuit", "PCA as choosing a camera angle",
+        "Imagine a flat, disc-shaped galaxy of points floating in 3-D. "
+        "Photographed face-on you see its full structure; photographed edge-on "
+        "it collapses to a line and you lose everything. PCA finds the face-on "
+        "angle automatically, by maximising the spread of the shadow. The "
+        "eigenvalues tell you how much structure each angle preserves, and the "
+        "explained-variance ratio is just those numbers normalised to sum to "
+        "one.")
+    box("warn", "The direction with the most variance is not always the one you "
+        "want",
+        "PCA is unsupervised - it never looks at the labels. If your classes "
+        "differ along a low-variance direction (a small but consistent offset) "
+        "PCA may discard exactly that direction while faithfully preserving an "
+        "irrelevant high-variance one such as overall brightness. Always check "
+        "downstream accuracy after reducing, and consider LDA when you have "
+        "labels and separation is the goal.")
+
+
+def ex_ch13():
+    h2("One confusion matrix, every metric computed")
+    p("A fraud model is evaluated on 1,000 transactions, of which 100 are "
+      "genuinely fraudulent. It flags 140, of which 80 are correct.")
+    diagram([
+        "                        PREDICTED",
+        "                    fraud      legit        total",
+        "                +----------+----------+",
+        "   A    fraud   |  TP = 80 |  FN = 20 |     100",
+        "   C            +----------+----------+",
+        "   T    legit   |  FP = 60 |  TN =840 |     900",
+        "   U            +----------+----------+",
+        "   A    total       140         860        1000",
+    ], "Figure 13.2 - The worked example used throughout this section.")
+    tbl(["Metric", "Computation", "Value", "What it tells you"],
+        [["Accuracy", "(80+840)/1000", "0.920", "Looks excellent - but always "
+          "predicting 'legit' scores 0.900, so the model has bought you 2 points"],
+         ["Precision", "80/140", "0.571", "43% of the alerts are wrong; this is "
+          "the analyst's wasted time"],
+         ["Recall", "80/100", "0.800", "One fraud in five still gets through"],
+         ["F1", "2(0.571)(0.8)/(0.571+0.8)", "0.667", "The balance of the two"],
+         ["Specificity", "840/900", "0.933", "Most legitimate customers are left "
+          "alone"],
+         ["Balanced accuracy", "(0.800+0.933)/2", "0.867", "Accuracy that is not "
+          "fooled by the class ratio"],
+         ["MCC", "correlation form", "0.634", "The single most informative "
+          "scalar here"],
+         ["False positive rate", "60/900", "0.067", "The x-axis of the ROC curve"]],
+        widths=[18, 22, 12, 48], bold_first=True)
+    box("key", "Now convert the metrics into money",
+        "Suppose an investigated alert costs 20 EUR of analyst time and a missed "
+        "fraud costs 500 EUR. This model costs 140 x 20 + 20 x 500 = 12,800 EUR. "
+        "Lower the threshold until recall reaches 0.95: perhaps 300 alerts and "
+        "5 misses, costing 300 x 20 + 5 x 500 = 8,500 EUR - materially better, "
+        "with WORSE precision and WORSE accuracy. This is why Chapter 13 insists "
+        "that the threshold is a business decision. Compute the cost curve, "
+        "then pick the operating point; never accept 0.5 by default.")
+
+    h2("Reading a ROC curve and a PR curve of the same model")
+    diagram([
+        "   ROC  (TPR vs FPR)                PR  (precision vs recall)",
+        "   1 |      ____----                1 |--__",
+        "     |    _/                          |    \\__",
+        "   T |  _/                          P |       \\____",
+        "   P | /                            r |            \\____",
+        "   R |/                             e |                 \\___",
+        "   0 +------------------ 1         0 +---------------------- 1",
+        "          FPR                              Recall",
+        "   baseline = the diagonal          baseline = the positive rate (0.10)",
+        "   AUC = 0.93 (looks great)         AP = 0.61 (the honest picture)",
+    ], "Figure 13.3 - The same predictions, two curves, two impressions.")
+    p("The ROC curve's baseline is the diagonal regardless of class balance, so "
+      "a rare-positive problem always looks flattering. The PR curve's baseline "
+      "is the positive rate - here 0.10 - so an average precision of 0.61 is "
+      "correctly read as 'six times better than guessing', not as 'nearly "
+      "perfect'. When positives are rare, quote average precision and show the "
+      "curve.")
+
+
+def ex_ch15():
+    h2("Backpropagation on real numbers, end to end")
+    p("Everything in this chapter becomes concrete once you push one sample "
+      "through a network by hand. Here is a 2-2-1 network with ReLU hidden "
+      "units and a sigmoid output, one training sample, and every number "
+      "written out. Verify each line with a calculator; it takes ten minutes "
+      "and permanently removes the mystery.")
+    diagram([
+        "        x1=1.0 ---.                                                  ",
+        "                   \\   W1 = [ 0.5  0.3 ]   b1 = [ 0.1 ]              ",
+        "                    >-------[ 0.2  0.8 ]        [-0.1 ]  -> h1, h2   ",
+        "        x2=2.0 ---'                                                  ",
+        "                                                                     ",
+        "        h1, h2 --> W2 = [1.0, -1.0], b2 = 0.5 --> z2 --> sigmoid --> p",
+        "                                                                     ",
+        "        true label y = 1        loss = binary cross-entropy          ",
+        "        (note: W1 row 2 is [-0.2, 0.8] in the arithmetic below)      ",
+    ], "Figure 15.2 - The network used for the hand computation.")
+    h3("Forward pass")
+    eq(["z1_1 = 0.5(1.0) + 0.3(2.0) + 0.1  =  1.2      a1_1 = ReLU(1.2) = 1.2",
+        "z1_2 = -0.2(1.0) + 0.8(2.0) - 0.1 =  1.3      a1_2 = ReLU(1.3) = 1.3",
+        "",
+        "z2   = 1.0(1.2) + (-1.0)(1.3) + 0.5 = 0.4",
+        "p    = sigmoid(0.4) = 1/(1 + e^-0.4) = 0.5987",
+        "L    = -log(0.5987) = 0.5130"])
+    h3("Backward pass")
+    p("Start at the output and walk backwards, applying the four equations from "
+      "the previous section. Every quantity below is a number you can check.")
+    eq(["delta2 = p - y = 0.5987 - 1 = -0.4013            <- the clean identity",
+        "",
+        "dL/dW2 = delta2 * a1 = -0.4013 * [1.2, 1.3] = [-0.4816, -0.5217]",
+        "dL/db2 = delta2 = -0.4013",
+        "",
+        "dL/da1 = W2^T * delta2 = [1.0, -1.0] * -0.4013 = [-0.4013, +0.4013]",
+        "delta1 = dL/da1 * ReLU'(z1) = [-0.4013, 0.4013] * [1, 1] = [-0.4013, 0.4013]",
+        "",
+        "dL/dW1 = delta1 (x)^T = [ -0.4013*1.0   -0.4013*2.0 ]",
+        "                        [ +0.4013*1.0   +0.4013*2.0 ]",
+        "                      = [ -0.4013  -0.8026 ]",
+        "                        [ +0.4013  +0.8026 ]",
+        "dL/db1 = delta1 = [-0.4013, +0.4013]"])
+    h3("The update, and proof that it worked")
+    eq(["With eta = 0.1:",
+        "  W1 <- [ 0.5401   0.3803 ]      W2 <- [1.0482, -0.9478]",
+        "        [-0.2401   0.7197 ]      b2 <- 0.5401",
+        "",
+        "Re-running the forward pass with the new weights:",
+        "  z2 = 1.0464     p = 0.7401     L = 0.3010",
+        "",
+        "The loss fell from 0.5130 to 0.3010 in one step, and the predicted",
+        "probability moved from 0.60 towards the true label 1. That is",
+        "learning, in its entirety."])
+    box("math", "Confirming the gradient numerically",
+        "Perturb W1[0,0] by eps = 1e-6 in each direction and recompute the "
+        "loss: (L(+eps) - L(-eps)) / (2 eps) = -0.401312, which matches the "
+        "analytic -0.401312 to six decimals. Do this for all four entries of W1 "
+        "and you have written your own gradient checker - the tool that "
+        "distinguishes a derivation error from a training-hyperparameter "
+        "problem.")
+    box("intuit", "Reading the numbers as a story",
+        "delta2 = -0.4013 says the output was too LOW by about 0.4 (in "
+        "probability terms). The gradient on W2 is negative for both hidden "
+        "units, so both connections strengthen - the network decides to listen "
+        "more to h1 and less negatively to h2. The gradient on W1 row 2 is "
+        "positive, so those weights DECREASE, which lowers h2, which raises z2 "
+        "because W2's second entry is negative. Every sign in the computation "
+        "has a plain-language reason, and tracing them is the best debugging "
+        "skill you can develop.")
+
+    h2("What ReLU's gate does to the gradient")
+    p("In the example above both hidden pre-activations were positive, so both "
+      "gates were open and gradient flowed to every weight. Change x to (1, "
+      "-2) and z1_1 becomes 0.5 - 0.6 + 0.1 = 0.0 while z1_2 becomes -0.2 - 1.6 "
+      "- 0.1 = -1.9. The second unit's ReLU derivative is then 0, so:")
+    eq(["delta1 = dL/da1 * [1, 0] = [-0.4013, 0]",
+        "dL/dW1 row 2 = [0, 0]     <- this unit learns NOTHING from this sample"])
+    p("That is the mechanism behind three things you will meet repeatedly: "
+      "ReLU networks are sparse (typically half the units are inactive on any "
+      "given input, which is a form of free regularisation); a unit whose "
+      "pre-activation is negative for **every** sample receives zero gradient "
+      "forever and is dead; and gradient can vanish not only by shrinking but "
+      "by being gated off entirely. Leaky ReLU exists precisely to leave the "
+      "gate slightly ajar.")
+
+
+def ex_ch17():
+    h2("One Adam update, arithmetic included")
+    p("Adam's formula has four moving parts, and seeing them evaluate on a "
+      "constant gradient makes the design obvious. Take g = 0.5 at every step, "
+      "with beta1 = 0.9, beta2 = 0.999, eta = 0.001, eps = 1e-8.")
+    tbl(["Step t", "m (first moment)", "v (second moment)", "m_hat", "v_hat",
+         "Update size"],
+        [["1", "0.05000", "0.000250", "0.50000", "0.250000", "0.001000"],
+         ["2", "0.09500", "0.000500", "0.50000", "0.250000", "0.001000"],
+         ["3", "0.13550", "0.000749", "0.50000", "0.250000", "0.001000"]],
+        widths=[10, 20, 20, 16, 16, 18], bold_first=True)
+    box("key", "Three things this table proves",
+        "(1) BIAS CORRECTION MATTERS: the raw m at step 1 is 0.05, ten times "
+        "smaller than the true gradient 0.5, because the moving average starts "
+        "from zero. Dividing by (1 - beta1^t) restores it exactly. Without "
+        "correction, Adam would take absurdly small steps for the first hundred "
+        "iterations. (2) THE UPDATE IS SCALE-FREE: it comes out at 0.001 = the "
+        "learning rate, and it would still be 0.001 if the gradient were 0.5, "
+        "50, or 5,000, because m_hat/sqrt(v_hat) cancels the magnitude. That is "
+        "why Adam needs so little tuning across wildly different layers and "
+        "losses. (3) THE UNITS ARE INTERPRETABLE: with Adam, the learning rate "
+        "IS roughly the per-step change in each parameter - which is why 1e-3 "
+        "and 3e-4 are such durable defaults.")
+    p("The flip side of scale invariance is that Adam ignores information SGD "
+      "uses: a parameter with a genuinely tiny gradient still gets a full-sized "
+      "step. That is one reason well-tuned SGD with momentum still edges out "
+      "Adam on some vision benchmarks, and why the gap closes when Adam is "
+      "paired with decoupled weight decay.")
+
+    h2("Choosing a learning rate: what each failure looks like")
+    diagram([
+        "  loss                                                          ",
+        "   |  \\                                                         ",
+        "   |   \\____________________  eta far too small (barely moves)  ",
+        "   |  \\                                                         ",
+        "   |   \\__                                                      ",
+        "   |      \\____                                                 ",
+        "   |           \\_______  eta good (fast, then flattens)         ",
+        "   |  \\/\\/\\                                                     ",
+        "   |       \\/\\/\\/\\/\\/\\/  eta slightly high (noisy plateau)      ",
+        "   |  /\\                                                        ",
+        "   | /  \\  /\\    /\\                                             ",
+        "   |/    \\/  \\__/  \\___ NaN   eta far too high (diverges)       ",
+        "   +---------------------------------------------> steps       ",
+    ], "Figure 17.1 - Four learning rates, four distinctive loss-curve shapes.")
+    tbl(["What you see", "Diagnosis", "Action"],
+        [["Loss barely changes over an epoch", "Learning rate 10-100x too small",
+          "Multiply by 10 and retry; run the LR range test"],
+         ["Smooth fall then a flat floor", "Healthy", "Add a decay schedule to "
+          "squeeze the last few percent"],
+         ["Falls then plateaus with visible noise", "Slightly too high for the "
+          "final phase", "Cosine or step decay; this is exactly what a schedule "
+          "fixes"],
+         ["Spikes upward, then NaN", "Far too high, or exploding gradients",
+          "Reduce by 10x, add gradient clipping, check for bad inputs"],
+         ["Falls, then rises steadily", "Not an LR problem - this is "
+          "overfitting", "Regularise; early stop"]],
+        widths=[28, 30, 42], bold_first=True)
+
+    h2("Momentum, seen as a ball on a surface")
+    box("intuit", "Why momentum is not just 'bigger steps'",
+        "Picture a narrow valley whose floor slopes gently towards the minimum "
+        "while its walls are steep. Plain gradient descent is dominated by the "
+        "steep direction: it bounces from wall to wall and creeps along the "
+        "floor. Momentum accumulates a velocity, and because the wall-bouncing "
+        "components alternate in sign they CANCEL, while the floor component "
+        "always points the same way and ACCUMULATES. With beta = 0.9 the "
+        "consistent direction is amplified by roughly 1/(1 - 0.9) = 10x, and "
+        "the oscillation is damped. That is why momentum both stabilises and "
+        "accelerates, which sounds contradictory until you see the cancellation.")
+
+
+def ex_ch21():
+    h2("Convolution arithmetic worked through")
+    p("Three formulas do all the work. Here they are applied to the cases you "
+      "will actually meet.")
+    tbl(["Input", "Kernel", "Padding", "Stride", "Output", "Comment"],
+        [["32x32", "3x3", "1", "1", "32x32", "'same' padding - the standard "
+          "feature-extraction layer"],
+         ["32x32", "3x3", "0", "1", "30x30", "'valid' - loses a ring of pixels "
+          "each layer"],
+         ["32x32", "3x3", "1", "2", "16x16", "Strided downsample, replaces "
+          "pooling"],
+         ["224x224", "7x7", "3", "2", "112x112", "The ResNet stem"],
+         ["32x32", "1x1", "0", "1", "32x32", "Channel mixing only - spatial size "
+          "untouched"]],
+        widths=[13, 12, 12, 11, 14, 38], bold_first=True)
+    eq(["O = floor( (I + 2P - K) / S ) + 1",
+        "",
+        "Check the third row: (32 + 2 - 3)/2 + 1 = floor(15.5) + 1 = 16.  OK."])
+
+    h2("Cost of one real layer, counted exactly")
+    p("Take a 3x3 convolution with 64 input channels and 128 output channels, "
+      "operating on a 32x32 feature map:")
+    eq(["Parameters = K*K*C_in*C_out + C_out",
+        "           = 3*3*64*128 + 128 = 73,728 + 128 = 73,856",
+        "",
+        "Multiply-adds = K*K*C_in*C_out*H_out*W_out",
+        "              = 3*3*64*128*32*32 = 75,497,472  (~75 M per image)"])
+    p("Now replace it with a depthwise separable block - a 3x3 depthwise "
+      "convolution followed by a 1x1 pointwise convolution:")
+    eq(["Parameters = (3*3*64 + 64) + (64*128 + 128) = 640 + 8,320 = 8,960",
+        "Multiply-adds = (3*3*64 + 64*128) * 32*32 = 8,978,432   (~9 M)",
+        "",
+        "Parameters:  8.2x fewer.    Compute:  8.4x fewer."])
+    box("key", "Where the saving comes from",
+        "A standard convolution does two jobs at once: it mixes across SPACE "
+        "(the 3x3 neighbourhood) and across CHANNELS (all 64 inputs feeding all "
+        "128 outputs), and it pays the product of the two costs. Separating "
+        "them turns a product into a sum: 3*3*64 for space plus 64*128 for "
+        "channels. The saving is roughly 1/C_out + 1/K^2, which for typical "
+        "values is 8-9x. Every efficient mobile architecture is built on this "
+        "one observation.")
+
+    h2("Receptive field, computed layer by layer")
+    p("A unit's receptive field is the patch of input that can influence it. "
+      "Grow it with the recurrence `RF <- RF + (K - 1) * (product of all "
+      "previous strides)`:")
+    tbl(["Layer", "Kernel", "Stride", "Cumulative stride", "Receptive field"],
+        [["input", "-", "-", "1", "1"],
+         ["conv 3x3", "3", "1", "1", "3"],
+         ["conv 3x3", "3", "1", "1", "5"],
+         ["maxpool 2x2", "2", "2", "2", "6"],
+         ["conv 3x3", "3", "1", "2", "10"],
+         ["conv 3x3", "3", "1", "2", "14"],
+         ["maxpool 2x2", "2", "2", "4", "16"],
+         ["conv 3x3", "3", "1", "4", "24"]],
+        widths=[20, 12, 12, 24, 32], bold_first=True)
+    p("Two practical consequences. Downsampling grows the receptive field far "
+      "faster than depth alone - after the second pool, each extra 3x3 "
+      "convolution adds 8 pixels of context instead of 2. And if your task "
+      "needs context wider than the final receptive field - a 200-pixel object "
+      "seen by units with a 24-pixel view - no amount of training will fix it; "
+      "the architecture is the constraint. Dilated convolutions, more "
+      "downsampling, or attention are the three ways out.")
+
+
+def ex_ch23():
+    h2("Attention computed on three tokens")
+    p("Nothing clarifies attention like doing it with small numbers. Three "
+      "tokens, d_k = 2, with queries and keys chosen so the pattern is "
+      "readable:")
+    eq(["Q = K = [ 1  0 ]        V = [ 1  0 ]",
+        "        [ 0  1 ]            [ 0  2 ]",
+        "        [ 1  1 ]            [ 3  1 ]",
+        "",
+        "token 1 points along x, token 2 along y, token 3 along both."])
+    h3("Step 1 - scores")
+    eq(["Q K^T / sqrt(2) = [ 0.707   0.000   0.707 ]",
+        "                  [ 0.000   0.707   0.707 ]",
+        "                  [ 0.707   0.707   1.414 ]"])
+    p("Row 3 is the interesting one: token 3 scores 1.414 against itself and "
+      "0.707 against each of the others, because its direction overlaps both. "
+      "Rows 1 and 2 each score 0 against the orthogonal token - orthogonal "
+      "means 'unrelated', and the dot product says so numerically.")
+    h3("Step 2 - softmax over each row")
+    eq(["weights = [ 0.401   0.198   0.401 ]     <- token 1 attends to 1 and 3",
+        "          [ 0.198   0.401   0.401 ]     <- token 2 attends to 2 and 3",
+        "          [ 0.248   0.248   0.504 ]     <- token 3 attends mostly to 3"])
+    h3("Step 3 - weighted sum of values")
+    eq(["output row 1 = 0.401*[1,0] + 0.198*[0,2] + 0.401*[3,1] = [1.604, 0.797]",
+        "output row 2 = 0.198*[1,0] + 0.401*[0,2] + 0.401*[3,1] = [1.401, 1.203]",
+        "output row 3 = 0.248*[1,0] + 0.248*[0,2] + 0.504*[3,1] = [1.759, 1.000]"])
+    p("Each token has been replaced by a blend of all tokens' values, weighted "
+      "by relevance. That is the entire operation. Everything else in a "
+      "Transformer - multiple heads, the projections W_Q/W_K/W_V, residuals, "
+      "the feedforward block - is packaging around these three steps.")
+    box("math", "Watching the sqrt(d_k) do its job",
+        "Without the scaling, row 1's scores are 1, 0, 1 and the softmax gives "
+        "0.422, 0.155, 0.422 - a bit sharper. With d_k = 2 the difference is "
+        "small, but scores grow like sqrt(d_k): at d_k = 64 an unscaled logit "
+        "gap of 8 instead of 1 turns the softmax nearly one-hot, its gradient "
+        "to nearly zero, and training stalls at initialisation. The division is "
+        "not cosmetic; it is what keeps the softmax differentiable at realistic "
+        "widths.")
+
+    h2("Why causal masking makes parallel training possible")
+    diagram([
+        "  Mask for a 4-token causal decoder (1 = allowed, . = -inf before softmax)",
+        "",
+        "            attends to:  t1  t2  t3  t4",
+        "     query t1            1    .   .   .      token 1 sees only itself",
+        "     query t2            1    1   .   .      token 2 sees 1 and 2",
+        "     query t3            1    1   1   .",
+        "     query t4            1    1   1   1",
+        "",
+        "  One forward pass computes the prediction for EVERY position at once,",
+        "  each conditioned only on its own past. An RNN needs 4 sequential steps",
+        "  to do the same thing. This is why Transformers train so much faster.",
+    ], "Figure 23.2 - The causal mask: n training examples from one sequence, in "
+       "one parallel pass.")
+    p("At **inference** the advantage disappears - tokens must still be "
+      "generated one at a time, each attending to all previous ones. That "
+      "asymmetry (parallel training, sequential generation) is why the KV cache "
+      "exists, why generation is memory-bandwidth bound, and why speculative "
+      "decoding is worth the complexity. Chapter 24 follows the consequences.")
+
+    h2("Sizing a Transformer block")
+    p("For d_model = 512 with 8 heads and a 4x feedforward expansion:")
+    tbl(["Component", "Shape", "Parameters"],
+        [["W_Q, W_K, W_V", "3 x (512 x 512)", "786,432"],
+         ["W_O (output projection)", "512 x 512", "262,144"],
+         ["Feedforward up", "512 x 2048", "1,048,576"],
+         ["Feedforward down", "2048 x 512", "1,048,576"],
+         ["2 x LayerNorm", "2 x 2 x 512", "2,048"],
+         ["Total per block", "-", "~3.15 M"],
+         ["12 blocks", "-", "~37.7 M, plus embeddings"]],
+        widths=[34, 30, 36], bold_first=True)
+    p("Note the split: attention holds about a third of the parameters and the "
+      "feedforward block about two thirds. That ratio holds across most model "
+      "sizes, and it is why pruning and quantization work on the feedforward "
+      "matrices give the largest returns (Chapters 28-29), and why "
+      "mixture-of-experts replaces exactly that block.")
+
+
+def ex_ch24():
+    h2("What 'next token prediction' actually looks like")
+    p("The training objective is unglamorous: given a prefix, predict the "
+      "distribution over the next token. Every capability people find "
+      "surprising is a side effect of doing this extremely well on a very large "
+      "corpus.")
+    diagram([
+        "  text:      'The capital of France is Paris'",
+        "  tokens:    [The] [ capital] [ of] [ France] [ is] [ Paris]",
+        "",
+        "  training example 1:  The                       -> ' capital'",
+        "  training example 2:  The capital               -> ' of'",
+        "  training example 3:  The capital of            -> ' France'",
+        "  training example 4:  The capital of France     -> ' is'",
+        "  training example 5:  The capital of France is  -> ' Paris'",
+        "",
+        "  All five are computed in ONE forward pass, thanks to causal masking.",
+    ], "Figure 24.1 - One six-token sentence yields five supervised examples.")
+    p("To predict ' Paris' reliably, a model must store a fact. To predict the "
+      "closing bracket of a nested expression it must track state. To predict "
+      "the next line of a proof it must do something that looks like reasoning. "
+      "None of these were trained for directly; they are what minimising "
+      "prediction error on a large enough corpus requires.")
+    tbl(["Loss value", "Perplexity", "Interpretation"],
+        [["11.0", "~60,000", "Untrained - uniform over the vocabulary"],
+         ["6.9", "~1,000", "Learned token frequencies only"],
+         ["4.0", "~55", "Basic grammar and local coherence"],
+         ["3.0", "~20", "Fluent text, weak factuality"],
+         ["2.0", "~7.4", "Strong modern model on general text"],
+         ["1.5", "~4.5", "Approaching the noise floor of natural text"]],
+        widths=[16, 18, 66], bold_first=True)
+    p("Perplexity is just `exp(cross-entropy)` and reads as 'the model is as "
+      "uncertain as if it were choosing uniformly among this many tokens'. "
+      "Watch it during any language-model training run: it should start near "
+      "the vocabulary size and fall fast.")
+
+    h2("The KV cache, sized with real numbers")
+    p("During generation the model re-reads every previous token's keys and "
+      "values. Caching them avoids recomputation, but the cache is large:")
+    eq(["bytes = 2 (K and V) * layers * kv_heads * head_dim * seq_len",
+        "        * batch * bytes_per_value",
+        "",
+        "7B-class model, 32 layers, 32 heads, head_dim 128, 8k context, fp16:",
+        "  2 * 32 * 32 * 128 * 8192 * 1 * 2 = 4.3 GB",
+        "",
+        "Same model with grouped-query attention, 8 KV heads:",
+        "  2 * 32 *  8 * 128 * 8192 * 1 * 2 = 1.07 GB    (4x smaller)"])
+    p("Compare that with the weights themselves: 7B parameters in fp16 is 14 GB. "
+      "So a single 8k-context conversation adds nearly a third again on top of "
+      "the model - and it scales linearly with both context length and batch "
+      "size, which is why serving many users at long context is a memory "
+      "problem before it is a compute problem. Grouped-query attention, paged "
+      "attention and 8-bit KV quantization each attack this directly.")
+
+    h2("Prompting, from worst to best")
+    tbl(["Version", "Prompt", "Why it behaves better"],
+        [["Bad", "'Summarise this.'", "No audience, no length, no format - the "
+          "model guesses all three"],
+         ["Better", "'Summarise the text below in 3 bullet points for a "
+          "non-technical manager.'", "Audience, length and format are now "
+          "constraints rather than guesses"],
+         ["Good", "Add: 'Use only information from the text. If a fact is not "
+          "stated, omit it.'", "Reduces fabrication by making abstention an "
+          "explicit option"],
+         ["Best", "Add: 'Return JSON: {summary: string[], omitted_topics: "
+          "string[]}' plus 2 examples", "Machine-parseable, and the examples "
+          "pin down the style far more precisely than adjectives can"]],
+        widths=[12, 46, 42], bold_first=True)
+    box("tip", "The two highest-value prompting habits",
+        "First, give the model somewhere to put its uncertainty - an "
+        "'unknown' field, permission to say the text does not answer the "
+        "question, a confidence score. A model with no legitimate way to "
+        "express doubt will invent an answer. Second, show rather than "
+        "describe: two examples of the exact output you want beat two "
+        "paragraphs describing it, because the examples constrain format, tone "
+        "and depth simultaneously.")
+
+
+def ex_ch28():
+    h2("Quantizing eight real weights, by hand")
+    p("Take these eight trained weights and quantize them to symmetric INT8 "
+      "per-tensor. Every number below is computed, not illustrative.")
+    eq(["w = [-0.82, -0.31, 0.05, 0.11, 0.47, 1.23, -1.05, 0.63]",
+        "",
+        "absmax = 1.23",
+        "scale s = absmax / 127 = 1.23 / 127 = 0.009685",
+        "q_i = round(w_i / s), clipped to [-127, 127]"])
+    tbl(["Original w", "w / s", "Quantized q", "Dequantized q*s", "Error"],
+        [["-0.82", "-84.67", "-85", "-0.8232", "-0.0032"],
+         ["-0.31", "-32.01", "-32", "-0.3099", "+0.0001"],
+         ["0.05", "5.16", "5", "0.0484", "-0.0016"],
+         ["0.11", "11.36", "11", "0.1065", "-0.0035"],
+         ["0.47", "48.53", "49", "0.4746", "+0.0046"],
+         ["1.23", "127.00", "127", "1.2300", "0.0000"],
+         ["-1.05", "-108.42", "-108", "-1.0460", "+0.0040"],
+         ["0.63", "65.05", "65", "0.6295", "-0.0005"]],
+        widths=[18, 16, 18, 24, 24], bold_first=True)
+    eq(["Max absolute error = 0.0046      RMSE = 0.0028",
+        "Storage: 8 floats (32 B) -> 8 int8 (8 B) + 1 float scale (4 B) = 12 B"])
+    p("Two observations that generalise. The largest-magnitude weight is "
+      "represented exactly, because it defines the scale - so the widest weight "
+      "in a tensor gets perfect treatment while everything else is rounded, "
+      "which is precisely why a single outlier ruins per-tensor quantization "
+      "for the other 4,095 weights in its row. And the error is bounded by half "
+      "a step, s/2 = 0.0048, uniformly across the range: quantization error is "
+      "roughly uniform noise, not proportional error.")
+
+    h2("What happens as the bits come off")
+    tbl(["Bit width", "Levels", "Step size s", "RMSE on the weights above",
+         "Rule of thumb"],
+        [["8-bit", "255", "0.0097", "0.0028", "Essentially free; PTQ suffices"],
+         ["4-bit", "15", "0.176", "0.0507", "18x worse; needs per-group scales "
+          "or GPTQ/AWQ"],
+         ["2-bit", "3", "1.23", "0.334", "120x worse; needs QAT and usually "
+          "still hurts"]],
+        widths=[14, 12, 16, 26, 32], bold_first=True)
+    p("Error grows roughly as 2^(-b), so each bit removed doubles the noise. "
+      "That is the whole trade-off curve, and it explains why INT8 is nearly "
+      "free while INT4 needs help and INT2 needs a rethink of the training "
+      "itself.")
+
+    h2("Asymmetric quantization for activations, worked")
+    p("Post-ReLU activations are non-negative, so a symmetric scheme wastes "
+      "half its codes on values that never occur. With a calibrated range of "
+      "[0, 4.0] into uint8:")
+    eq(["s = (4.0 - 0.0) / 255 = 0.015686        z = 0  (since r_min = 0)",
+        "",
+        "a = 0.0  -> q = 0    -> 0.0000",
+        "a = 0.4  -> q = 26   -> 0.4078",
+        "a = 1.2  -> q = 76   -> 1.1922",
+        "a = 2.8  -> q = 178  -> 2.7922",
+        "a = 3.9  -> q = 249  -> 3.9059"])
+    box("key", "Why exact zero must map to an exact code",
+        "Here z = 0, so the real value 0.0 maps to the integer 0 with no error "
+        "at all. That is essential: padding, masking and ReLU all produce exact "
+        "zeros in bulk, and if 0.0 quantized to, say, 0.008 instead, every "
+        "padded position in every sequence would contribute a small systematic "
+        "bias that accumulates across layers. The zero-point exists to make "
+        "this impossible.")
+
+    h2("The whole INT8 layer, arithmetic included")
+    eq(["Real:      y = SUM_i w_i x_i",
+        "Quantized: w_i = s_w q_w_i,   x_i = s_x (q_x_i - z_x)",
+        "",
+        "y = s_w s_x [ SUM_i q_w_i q_x_i  -  z_x SUM_i q_w_i ]",
+        "             \\___ int8 x int8 -> int32 ___/  \\__ constant __/",
+        "",
+        "The bracketed sum is pure integer arithmetic. The second term depends",
+        "only on the weights, so it is precomputed once and folded into the",
+        "bias. The float scales multiply the int32 accumulator once at the end -",
+        "and even that is usually done as a fixed-point multiply-and-shift, so",
+        "a device with no floating-point unit can run the layer end to end."])
+    p("This is the reason INT8 inference is fast rather than merely small: the "
+      "inner loop is integer multiply-accumulate, which is what DSPs, NPUs and "
+      "microcontroller SIMD units are built for, and which costs roughly an "
+      "order of magnitude less energy per operation than the float equivalent.")
+
+
+def ex_ch29():
+    h2("Pruning a small layer, weight by weight")
+    p("Take a 4x4 weight matrix and apply 50% magnitude pruning three ways. The "
+      "difference between the three is the entire practical content of this "
+      "chapter.")
+    eq(["W = [  0.90  -0.05   0.60   0.02 ]      row norms (L2):",
+        "    [  0.03   0.01  -0.02   0.04 ]        row 1: 1.08",
+        "    [ -0.70   0.80   0.10  -0.50 ]        row 2: 0.06",
+        "    [  0.20  -0.15   0.05   0.30 ]        row 3: 1.19",
+        "                                          row 4: 0.39"])
+    tbl(["Scheme", "What is removed", "Result", "Speedup on a dense kernel"],
+        [["Unstructured, 50%", "The 8 smallest |w| anywhere",
+          "Scattered zeros; W keeps its 4x4 shape", "None - the kernel still "
+          "multiplies 16 numbers"],
+         ["2:4 semi-structured", "The 2 smallest of every 4 consecutive weights",
+          "Exactly 2 non-zeros per group of 4", "Up to ~2x on sparse tensor "
+          "cores"],
+         ["Structured (rows), 50%", "The 2 rows with the smallest norm - rows 2 "
+          "and 4", "A genuine 2x4 matrix", "2x everywhere, on any hardware"]],
+        widths=[20, 32, 26, 22], bold_first=True)
+    p("Look at what structured pruning chose. Row 2 has every weight near zero: "
+      "removing it costs almost nothing, and it removes a whole output "
+      "channel - the next layer loses an input, the tensor genuinely shrinks, "
+      "and every runtime on earth is faster as a result. Row 4 is a real "
+      "sacrifice: its norm is 0.39, so some signal is lost. That is the "
+      "structured/unstructured trade in miniature - unstructured pruning "
+      "removes exactly the least useful weights but changes nothing about the "
+      "computation, while structured pruning removes some useful weights and "
+      "actually makes the model smaller.")
+    box("warn", "The reported-sparsity trap",
+        "A paper or a blog post that says '95% of weights removed, 0.3% "
+        "accuracy lost' and shows no latency measurement has almost certainly "
+        "measured nothing that a deployment would feel. Ask three questions: "
+        "which granularity, which runtime, and what was the measured "
+        "milliseconds-per-inference before and after on the target device. If "
+        "the answer to the third is missing, the compression is theoretical.")
+
+    h2("How far can you actually prune?")
+    tbl(["Sparsity", "Typical accuracy effect (with fine-tuning)", "Notes"],
+        [["0-50%", "None measurable on an over-parameterised model",
+          "Essentially free; the network was carrying redundancy"],
+         ["50-80%", "0-1 point", "Needs gradual pruning plus fine-tuning"],
+         ["80-95%", "1-4 points", "Needs iterative pruning; small layers must be "
+          "protected"],
+         [">95%", "Large and erratic", "Only for heavily over-parameterised "
+          "models; consider a smaller architecture instead"]],
+        widths=[14, 40, 46], bold_first=True)
+    box("tip", "Prune the right layers",
+        "Never prune the first and last layers at the same rate as the middle. "
+        "The first layer has few parameters but sees the raw input, and the "
+        "last maps to the classes - damage there is disproportionate, while the "
+        "savings are trivial because both are small. Global magnitude pruning "
+        "with no exclusions will happily gut them, which is the most common "
+        "reason a pruning run collapses.")
+
+    h2("Compression stacked, with the numbers")
+    tbl(["Stage", "Size", "Latency", "Accuracy", "What changed"],
+        [["Dense FP32 baseline", "14.0 MB", "100 ms", "94.2%", "-"],
+         ["+ 50% channel pruning", "7.2 MB", "58 ms", "93.6%", "Genuinely "
+          "smaller tensors"],
+         ["+ INT8 quantization", "1.9 MB", "24 ms", "92.7%", "4x memory, integer "
+          "kernels"],
+         ["+ distillation from the dense teacher", "1.9 MB", "24 ms", "93.9%",
+          "Same model, better weights"]],
+        widths=[34, 14, 16, 16, 20], bold_first=True)
+    p("Read the last row carefully: distillation changed nothing about the "
+      "model's size or speed, and recovered most of the accuracy lost to the "
+      "first two stages. That is the standard modern recipe - compress "
+      "aggressively, then use the uncompressed model as a teacher to repair the "
+      "damage. It is almost always better than compressing less.")
+
+
+def ex_ch32():
+    h2("A gridworld you can solve on paper")
+    p("Reinforcement learning becomes concrete on a four-state corridor. States "
+      "S1..S4, actions left and right, reward +1 for reaching S4 and 0 "
+      "elsewhere, gamma = 0.9.")
+    diagram([
+        "     [S1] <---> [S2] <---> [S3] <---> [S4 goal, +1]",
+        "",
+        "  Optimal values, working backwards from the goal:",
+        "     V(S4) = 1.0        (terminal)",
+        "     V(S3) = 0 + 0.9 * 1.0   = 0.90",
+        "     V(S2) = 0 + 0.9 * 0.90  = 0.81",
+        "     V(S1) = 0 + 0.9 * 0.81  = 0.729",
+    ], "Figure 32.1 - Value propagates backwards from reward, decaying by gamma "
+       "per step.")
+    p("This tiny example shows the three ideas that carry all the way to "
+      "AlphaZero. Value is **discounted distance to reward**: gamma = 0.9 means "
+      "a reward three steps away is worth 0.729 now, so the agent prefers "
+      "shorter paths without being told to. Value **propagates backwards** one "
+      "step per update, which is why sparse-reward problems need so many "
+      "episodes - the signal has to crawl back from the goal. And a **policy "
+      "falls out of the values for free**: in each state, move to the "
+      "neighbouring state with the higher value.")
+    tbl(["gamma", "Value of a reward 10 steps away", "Behaviour"],
+        [["0.5", "0.001", "Extremely myopic - ignores anything beyond a few "
+          "steps"],
+         ["0.9", "0.35", "Balanced; the common default"],
+         ["0.99", "0.90", "Far-sighted; needed for long tasks, but slows "
+          "learning and increases variance"],
+         ["1.0", "1.00", "No discounting - only valid for episodes guaranteed to "
+          "terminate"]],
+        widths=[12, 32, 56], bold_first=True)
+
+    h2("Why reinforcement learning is harder than supervised learning")
+    tbl(["Difficulty", "Supervised learning", "Reinforcement learning"],
+        [["Where the data comes from", "A fixed dataset, independent of the "
+          "model", "The agent's own behaviour - a bad policy collects bad data"],
+         ["Feedback", "The correct answer, for every sample",
+          "A scalar reward, often delayed by hundreds of steps"],
+         ["Credit assignment", "Immediate: this prediction, this loss",
+          "Which of the last 200 actions caused the reward?"],
+         ["Stationarity", "The target never moves",
+          "The target moves - the value function bootstraps from itself"],
+         ["Evaluation", "Held-out test set", "You must run the policy to know "
+          "how good it is, and running it may be expensive or unsafe"],
+         ["Failure mode", "Overfitting", "Collapse, reward hacking, or silently "
+          "converging to a mediocre policy"]],
+        widths=[22, 34, 44], bold_first=True)
+    box("tip", "The order to try things in",
+        "If you can log what a good decision-maker did, start with behaviour "
+        "cloning - it is plain supervised learning and it works. If decisions "
+        "do not affect future state, use a contextual bandit. Only when actions "
+        "genuinely change the world you observe next is full reinforcement "
+        "learning the right tool, and even then start with PPO or SAC and a "
+        "carefully shaped reward rather than an exotic algorithm.")
 
 
 # =============================================================================
