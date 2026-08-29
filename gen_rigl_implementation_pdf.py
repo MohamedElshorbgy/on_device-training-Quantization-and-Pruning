@@ -75,8 +75,9 @@ def explain(rows, caption=None):
     data = [[Paragraph(mk(h), S_TH) for h in ("Line", "Code", "What it does and why")]]
     for ref, frag, why in rows:
         data.append([
-            # non-breaking hyphen so "18-20" never wraps mid-range
-            Paragraph(mk(str(ref)).replace("-", "\u2011"), S_TDB),
+            # plain hyphen: U+2011 has no glyph in Helvetica and renders as a
+            # black box. The 13mm column is wide enough that "16-18" fits.
+            Paragraph(mk(str(ref)), S_TDB),
             Paragraph('<font face="Courier" size="7.6">%s</font>' % xe(frag), S_TD),
             Paragraph(mk(why), S_TD),
         ])
@@ -451,73 +452,169 @@ def ch_kth_smallest():
 
     h2("Line by line")
     explain([
-        ("1-3", "float findAbsKth...(weights, mask, K)",
-         "Returns a float threshold. `weights` is the layer's weight tensor, "
-         "`mask` the BOOL tensor of the same element count, `K` how many "
-         "weights the caller wants to drop. The function does not modify "
-         "anything - it only computes a number, which makes it trivially "
-         "testable."),
-        ("4", "n = calcNumberOfElementsByTensor(weights)",
-         "Total elements in the layer, active and inactive. For the HAR "
-         "1152 x 64 layer this is 73,728. Note this is the count of ELEMENTS, "
-         "not bytes - the mask is indexed by the same flat index."),
-        ("5", "float *w = (float *)weights->data",
-         "Direct float access, bypassing the tensor accessors. This is valid "
-         "only because the weights are FLOAT32. For SYM_INT32 weights the "
-         "stored values are int32 mantissas and you must reconstruct "
-         "`mantissa * scale` before comparing magnitudes - see the note at the "
-         "end of this chapter."),
-        ("8-10", "for i: if (tensorBoolGet(mask,i)) count++",
-         "First pass over the mask, counting active weights. This is needed "
-         "because the buffer allocated on line 14 must be exactly the right "
-         "size, and the count is not stored anywhere - the mask is the only "
-         "record of it."),
-        ("12", "if (K >= count) return 1e38f",
-         "Guard for the degenerate case: the caller wants to drop at least as "
-         "many weights as are active. Returning a huge threshold means every "
-         "active weight satisfies `|w| <= thresh`, so all of them drop. It also "
-         "protects line 31 from indexing past the end of the buffer. 1e38 is "
-         "just under FLT_MAX (3.4e38), so it is a finite float that no real "
-         "weight can exceed."),
-        ("14", "vals = malloc(count * sizeof(float))",
-         "A scratch buffer for the active magnitudes. The size is not known at "
-         "compile time, which is why heap allocation is used - see the MCU "
-         "warning below, because on a Cortex-M7 this is the most questionable "
-         "line in the whole implementation."),
+        ("1", "float findAbsKthSmallestActive(tensor_t *weights,",
+         "**Does:** declares a function returning a float threshold. "
+         "**Why a float and not a list of indices:** returning a threshold "
+         "makes the function pure and stateless - it allocates nothing the "
+         "caller must free, and the caller decides what to do with it. A "
+         "function that returned 'the K indices to drop' would need a buffer, "
+         "an ownership convention, and a second pass anyway."),
+        ("2", "tensor_t *mask,",
+         "**Does:** the mask defining which weights count. "
+         "**Why it is a parameter rather than read from the layer:** this keeps "
+         "the function independent of `linearConfig_t`, so it can be unit "
+         "tested with two bare tensors and no model - which is exactly how "
+         "Chapter 14 tests it."),
+        ("3", "size_t K) {",
+         "**Does:** how many weights the caller intends to drop. "
+         "**Why `size_t`:** it indexes into the array on line 31, and a signed "
+         "type would invite a negative K that indexes backwards."),
+        ("4", "size_t n = calcNumberOfElementsByTensor(weights);",
+         "**Does:** the total element count, active and inactive. "
+         "**Why total and not active:** the loops on lines 9 and 18 walk the "
+         "whole tensor, because the mask is a bitmap with no index list. "
+         "**Careful:** ELEMENTS, not bytes - the mask must report the same "
+         "number."),
+        ("5", "float *w = (float *)weights->data;",
+         "**Does:** a raw float view, bypassing the tensor accessors. "
+         "**Why:** this pointer is dereferenced up to n times in the gather "
+         "loop; a function call per element would dominate the cost. "
+         "**If wrong:** valid only for FLOAT32. A SYM_INT32 tensor holds int32 "
+         "mantissas, and reinterpreting those bits as floats yields magnitudes "
+         "unrelated to the real weights. The fix is to reconstruct "
+         "`mantissa * scale` first - a planned enhancement in the source, not "
+         "implemented."),
+        ("7", "/* Pass 1: how many weights are currently active? */",
+         "**Does:** nothing at runtime. **Why it earns its place:** this "
+         "function makes three passes over the data and a reader needs to know "
+         "which one they are in."),
+        ("8", "size_t count = 0;",
+         "**Does:** initialises the active counter. "
+         "**Why it must be counted at all:** nothing in ODT stores the active "
+         "count; the mask is the sole record, so it is recomputed on every "
+         "call."),
+        ("9", "for (size_t i = 0; i < n; i++)",
+         "**Does:** the counting scan. "
+         "**Why over n and not over some smaller set:** there is no list of "
+         "active positions to iterate - finding them IS this loop."),
+        ("10", "if (tensorBoolGet(mask, i)) count++;",
+         "**Does:** tests one mask bit; increments if set. "
+         "**Cost:** `tensorBoolGet` is a load, a shift and an AND - about 3-4 "
+         "cycles on a Cortex-M7, so this pass costs roughly 4n cycles. For the "
+         "HAR layer, about 300,000 cycles, or 1.4 ms at 216 MHz."),
+        ("12", "if (K >= count) return 1e38f;",
+         "**Does:** handles the case where the caller asks to drop at least as "
+         "many weights as are active. "
+         "**Why 1e38 specifically:** it is a finite float just under FLT_MAX "
+         "(3.4e38), so it compares cleanly and never becomes an infinity that "
+         "could propagate as a NaN in later arithmetic. Every active weight "
+         "satisfies `|w| <= 1e38`, so all of them drop - the correct reading of "
+         "'you asked for more than exist'. "
+         "**Second job:** it guarantees `K < count` for line 31, which would "
+         "otherwise index past the end of the buffer."),
+        ("14", "float *vals = malloc(count * sizeof(float));",
+         "**Does:** allocates a scratch buffer holding one float per active "
+         "weight. "
+         "**Why heap:** `count` is a runtime value, so a fixed-size array would "
+         "have to be sized for the worst case. "
+         "**Why this is the worst line in the file on an MCU:** 29 KB here, and "
+         "259 KB in the sibling function, on a 320 KB device with no MMU, "
+         "allocated and freed every 100 steps. Repeated allocation of "
+         "differently-sized blocks fragments the heap; the failure mode is a "
+         "NULL return hours into a run. Defect D8."),
         ("15", "if (!vals) { exit(1); }",
-         "Allocation failure handling. `exit(1)` is acceptable in a host-side "
-         "prototype and is NOT acceptable on the target: there is no operating "
-         "system to exit to. On the MCU this must return an error code and let "
-         "the caller skip the RigL step for this layer."),
-        ("18-20", "if (tensorBoolGet(mask,i)) vals[idx++] = fabsf(w[i])",
-         "Second pass, gathering the absolute values of the active weights into "
-         "the dense scratch buffer. `fabsf` not `fabs` - the float version, "
-         "avoiding a double promotion that on an M7 costs both cycles and code "
-         "size. After this loop `idx == count`."),
-        ("22", "for (i = 0; i <= K && i < count; i++)",
-         "The outer loop of a PARTIAL selection sort. A full sort would run to "
-         "`count`; stopping at K+1 is what makes this O(count*K) instead of "
-         "O(count^2). The `i < count` term is belt and braces - line 12 already "
-         "guarantees K < count."),
-        ("23-25", "minIdx = i; for j > i: if smaller, minIdx = j",
-         "Classic selection sort inner loop: scan the unsorted tail for the "
-         "smallest remaining value. This is the hot loop of the function and "
-         "the reason the cost is O(count*K)."),
-        ("26-28", "swap vals[i] and vals[minIdx]",
-         "Move that smallest value into position i. After the outer loop "
-         "finishes, positions 0..K hold the K+1 smallest magnitudes in "
-         "ascending order; positions K+1.. are in arbitrary order, which is "
-         "fine because they are never read."),
-        ("31", "thresh = vals[K < count ? K : count - 1]",
-         "The K-th smallest magnitude, zero-indexed - so this is actually the "
-         "(K+1)-th smallest value. The ternary is redundant given line 12 but "
-         "makes the function safe if that guard is ever changed. **This line "
-         "is where defect D1 in Chapter 17 lives:** combined with the `<=` "
-         "comparison in rigLStep(), it drops K+1 weights rather than K."),
-        ("32-33", "free(vals); return thresh;",
-         "Release the scratch buffer and return. Note the buffer is freed on "
-         "every path except the `exit(1)` on line 15, so there is no leak."),
-    ])
+         "**Does:** aborts on allocation failure. "
+         "**Why it is unacceptable on the target:** there is no operating "
+         "system to exit to. On bare metal `exit()` either hangs in a loop or "
+         "invokes undefined behaviour, and either way a training run dies with "
+         "no diagnostic. Return an error and let the caller skip this layer's "
+         "RigL step - one missed swap is harmless."),
+        ("17", "size_t idx = 0;",
+         "**Does:** the write cursor into the scratch buffer. "
+         "**Why a separate counter:** the read index `i` walks all n positions "
+         "while the write index advances only on active ones, so the two cannot "
+         "be the same variable."),
+        ("18", "for (size_t i = 0; i < n; i++)",
+         "**Does:** the gather scan - the second full pass. "
+         "**Why not fused with pass 1:** the buffer cannot be allocated until "
+         "its size is known, and its size is what pass 1 computes. Fusing them "
+         "would need a growable buffer or an upper-bound allocation of n "
+         "floats, which for the HAR layer is 288 KB - worse than the problem it "
+         "solves."),
+        ("19", "if (tensorBoolGet(mask, i)) vals[idx++] = fabsf(w[i]);",
+         "**Does:** copies |w| of each active weight into the dense buffer. "
+         "**Why absolute value:** RigL ranks by magnitude - a weight of -0.8 is "
+         "just as influential as +0.8. "
+         "**Why `fabsf` and not `fabs`:** the float version. `fabs` takes a "
+         "double, so it promotes, computes in double, and demotes - on an M7 "
+         "with a single-precision FPU that means a software double routine, "
+         "costing tens of cycles per element instead of one. "
+         "**Postcondition:** `idx == count`."),
+        ("21", "/* Partial selection sort: first K+1 positions. */",
+         "**Does:** nothing at runtime. **Why it matters:** without this "
+         "comment a reader assumes the loop below is a broken full sort."),
+        ("22", "for (size_t i = 0; i <= K && i < count; i++) {",
+         "**Does:** the outer loop of a partial selection sort, running K+1 "
+         "times. **Why `<= K` and not `< K`:** positions 0..K must all be "
+         "settled, because line 31 reads `vals[K]`. "
+         "**Why partial at all:** a full sort is O(count^2) here; stopping "
+         "early makes it O(count x K). For the HAR layer that is 16.3 M "
+         "comparisons instead of 54 M. "
+         "**The `i < count` term** is redundant given line 12, but survives a "
+         "future change to that guard."),
+        ("23", "size_t minIdx = i;",
+         "**Does:** assumes the current position holds the smallest remaining "
+         "value. **Why:** selection sort's invariant - everything before `i` is "
+         "already in its final place, so the search starts at `i`."),
+        ("24", "for (size_t j = i + 1; j < count; j++)",
+         "**Does:** scans the unsorted tail. "
+         "**Why from `i+1`:** positions at or below `i` are settled. "
+         "**Cost:** this is the hot loop; it executes about count x K times in "
+         "total and is where essentially all the function's time goes."),
+        ("25", "if (vals[j] < vals[minIdx]) minIdx = j;",
+         "**Does:** tracks the index of the smallest value seen. "
+         "**Why `<` and not `<=`:** with `<=` the index would keep moving among "
+         "equal values for no benefit; either is correct, `<` does less work. "
+         "**Note:** this is the ONE line that differs between this function and "
+         "its sibling, where it becomes `>`."),
+        ("26", "float tmp = vals[i];",
+         "**Does:** the first step of a three-line swap. "
+         "**Why a manual swap:** C has no swap operator, and a memcpy of four "
+         "bytes would be slower than three register moves."),
+        ("27", "vals[i] = vals[minIdx];",
+         "**Does:** moves the smallest remaining value into position `i`."),
+        ("28", "vals[minIdx] = tmp;",
+         "**Does:** completes the swap. "
+         "**Postcondition after the outer loop:** positions 0..K hold the K+1 "
+         "smallest magnitudes in ascending order; positions K+1.. are in "
+         "arbitrary order, which is fine because they are never read."),
+        ("31", "float thresh = vals[K < count ? K : count - 1];",
+         "**Does:** reads the K-th smallest magnitude, zero-indexed - so "
+         "actually the (K+1)-th smallest value. Toy layer: `vals[2]` = 0.30. "
+         "**Why the ternary:** redundant given line 12, but it makes the "
+         "function safe on its own terms rather than relying on a guard forty "
+         "lines away. "
+         "**Where defect D1 lives:** paired with the `<=` in rigLStep(), this "
+         "selects K+1 weights. Either return `vals[K-1]` and keep `<=`, or keep "
+         "this and use a strict `<`."),
+        ("32", "free(vals);",
+         "**Does:** releases the scratch buffer. "
+         "**Why here and not after the return:** it must precede the return, "
+         "and `thresh` was copied out on line 31 precisely so that this is "
+         "possible. Every path except the `exit(1)` frees, so there is no "
+         "leak."),
+        ("33", "return thresh;",
+         "**Does:** hands the caller a single float. "
+         "**What the caller does with it:** compares every active weight "
+         "against it. The function itself never touches the mask - it is "
+         "read-only over its inputs, which is what makes it safe to call twice "
+         "or to test in isolation."),
+        ("34", "}",
+         "**Does:** end of function. Note what is NOT here: no mask mutation, "
+         "no weight mutation, no logging, no global state. That purity is why "
+         "this is the first component to implement and the easiest to trust."),
+    ], "Table 5.1 - Every line of findAbsKthSmallestActive(). Toy-layer values "
+       "refer to the 8-weight example of Chapter 2.")
 
     h2("Worked example")
     p("The source gives this example in section 39.2. It is worth working "
@@ -613,42 +710,114 @@ def ch_kth_largest():
 
     h2("Line by line - only the differences from Component 1")
     explain([
-        ("1", "tensor_t *grads",
-         "The first argument is the GRADIENT tensor, not the weights. This is "
-         "the whole point of RigL: growth decisions are made on gradient "
-         "magnitude, because the gradient of an inactive weight estimates how "
-         "much the loss would improve if that connection were switched on."),
-        ("5", "float *g = (float *)grads->data",
-         "Direct float access to the gradients. In ODT, gradient tensors may be "
-         "SYM_INT32 when FQT is enabled - in that case this cast is wrong and "
-         "you must reconstruct the real value from the mantissa and scale "
-         "before taking magnitudes. Chapter 17, defect D3b."),
-        ("9", "if (!tensorBoolGet(mask, i)) count++",
-         "Note the negation. Component 1 counted active weights; this counts "
-         "INACTIVE ones. At 90% sparsity `count` here is about 66,355 - nine "
-         "times larger than in Component 1, which makes this the more expensive "
-         "of the two functions."),
-        ("11", "if (K >= count) return 0.0f",
-         "The degenerate guard, and note the return value is 0.0f, not 1e38f. "
-         "Because the GROW comparison is `|g| >= thresh`, a threshold of zero "
-         "matches every inactive weight, so all of them grow - the correct "
-         "meaning of 'you asked for more than exist'. Returning +inf here, by "
-         "symmetry with Component 1, would have grown nothing and silently "
-         "densified the layer over time."),
-        ("18", "vals[idx++] = fabsf(g[i])",
-         "Gathers |gradient| for inactive positions. **This is the line that "
-         "depends on defect D3:** if the gradient for inactive weights was "
-         "never computed, or was zeroed by the previous rigLStep(), every value "
-         "gathered here is 0.0 and the growth decision becomes arbitrary."),
-        ("20-27", "if (vals[j] > vals[maxIdx]) maxIdx = j",
-         "The only structural change from Component 1: `>` instead of `<`, and "
-         "`maxIdx` instead of `minIdx`, giving a descending partial sort. "
-         "Everything else about the sort is identical."),
-        ("29", "thresh = vals[K < count ? K : count - 1]",
-         "The K-th largest gradient magnitude, zero-indexed. As in Component 1, "
-         "pairing this with a non-strict `>=` in rigLStep() activates K+1 "
-         "weights rather than K."),
-    ])
+        ("1", "float findAbsKthLargestInactive(tensor_t *grads,",
+         "**Does:** declares the GROW-side selector. "
+         "**Why the first argument is GRADIENTS, not weights:** this is the "
+         "conceptual heart of RigL. An inactive weight is exactly zero, so its "
+         "magnitude carries no information at all. Its GRADIENT, by contrast, "
+         "is the derivative of the loss with respect to that connection - a "
+         "direct estimate of how much the loss would fall if it were switched "
+         "on. Ranking by it is what makes RigL better than random regrowth."),
+        ("2", "tensor_t *mask,", "**Does:** the same mask as Component 1, but "
+         "read with the opposite polarity. **Why one mask serves both:** a "
+         "single bitmap defines both sets - active is bit 1, inactive is bit 0 "
+         "- so there is nothing to keep in sync."),
+        ("3", "size_t K) {", "**Does:** how many connections to activate. "
+         "**Why it should equal the number actually dropped, not the nominal "
+         "K:** if DROP removed K+1 because of the tie behaviour in Component 1, "
+         "growing only K leaves the layer one connection sparser than it "
+         "started. The fix in Appendix A passes `dropped` here for exactly "
+         "this reason."),
+        ("4", "size_t n = calcNumberOfElementsByTensor(grads);",
+         "**Does:** total elements. **Why from the gradient tensor:** it has "
+         "the same shape as the weights, so either would do; taking it from the "
+         "tensor actually being read keeps the function self-consistent."),
+        ("5", "float *g = (float *)grads->data;",
+         "**Does:** raw float view of the gradients. "
+         "**If wrong:** the FQT caveat is sharper here than in Component 1. "
+         "Gradient tensors in ODT are the ones most likely to be SYM_INT32, "
+         "because that is the point of fully quantized training - so this cast "
+         "is the first thing to revisit when FQT is switched on. Defect D3b."),
+        ("7", "size_t count = 0;", "**Does:** initialises the INACTIVE "
+         "counter. **Scale note:** at 90% sparsity this will reach about "
+         "66,355 for the HAR layer - nine times what Component 1 counts, which "
+         "is what makes this the expensive half."),
+        ("8", "for (size_t i = 0; i < n; i++)", "**Does:** the counting scan, "
+         "identical in structure to Component 1."),
+        ("9", "if (!tensorBoolGet(mask, i)) count++;",
+         "**Does:** counts CLEAR bits. "
+         "**The one character that matters:** the `!`. Copying this function "
+         "from its sibling and forgetting the negation gives you a threshold "
+         "computed over the wrong population - and since both functions return "
+         "a plausible small float, nothing about the result looks wrong."),
+        ("11", "if (K >= count) return 0.0f;",
+         "**Does:** the degenerate guard. "
+         "**Why 0.0 and not 1e38 as in Component 1:** because the GROW "
+         "comparison is `|g| >= thresh`. A threshold of zero matches every "
+         "inactive weight, so all of them grow - the correct meaning of 'you "
+         "asked for more than exist'. "
+         "**If wrong:** returning 1e38 here, by false symmetry with Component "
+         "1, would grow NOTHING while DROP still removed K - and the layer "
+         "would get sparser at every RigL step until it was empty. This is the "
+         "most instructive asymmetry in the whole implementation."),
+        ("13", "float *vals = malloc(count * sizeof(float));",
+         "**Does:** allocates the scratch buffer. "
+         "**Why this is the blocker, not merely a smell:** count is the "
+         "INACTIVE population, so for the HAR layer this asks for "
+         "66,355 x 4 = 259 KB on a device with 320 KB of SRAM total, while "
+         "weights, gradients and activations are all resident. It will not "
+         "allocate. Component 1's 29 KB might; this will not. Defect D8, and "
+         "the histogram replacement is in Chapter 17."),
+        ("14", "if (!vals) { exit(1); }",
+         "**Does:** aborts on failure - which, given the line above, is the "
+         "path you should expect to take on the target. "
+         "**Better:** return 1e38f, which grows nothing and lets this RigL step "
+         "be skipped harmlessly, and log the failure."),
+        ("16-18", "gather |g| of inactive weights into vals",
+         "**Does:** the second pass, mirroring Component 1 but selecting the "
+         "complementary set. "
+         "**Where defect D3 becomes visible:** if the inactive gradients were "
+         "never computed - because the weight-gradient matmul was masked - or "
+         "were zeroed by the optimiser or by the previous rigLStep(), then "
+         "every value written here is 0.0. The function still returns a "
+         "number, the threshold is 0.0, and GROW then matches every inactive "
+         "weight in index order. Nothing crashes; RigL simply stops being "
+         "RigL."),
+        ("20", "/* Partial selection sort, DESCENDING this time. */",
+         "**Does:** nothing at runtime, but flags the single structural "
+         "difference from Component 1."),
+        ("21", "for (size_t i = 0; i <= K && i < count; i++) {",
+         "**Does:** the same partial sort loop, K+1 iterations. "
+         "**Cost:** count x K here is 66,355 x 2,212 = 147 M comparisons for "
+         "the HAR layer - nine times Component 1, and the reason a cheaper "
+         "selection method matters more on this side."),
+        ("22", "size_t maxIdx = i;",
+         "**Does:** tracks the largest remaining value rather than the "
+         "smallest. **Why the rename from `minIdx`:** it is not cosmetic - a "
+         "reader scanning for the difference between these two functions "
+         "should find it in the identifier, not only in the comparison."),
+        ("23-24", "if (vals[j] > vals[maxIdx]) maxIdx = j;",
+         "**Does:** the comparison flipped to `>`. "
+         "**This is the entire algorithmic difference** between Components 1 "
+         "and 2. Everything else - the counting pass, the gather, the swap, the "
+         "guards - is the same code with the mask polarity inverted."),
+        ("25-27", "swap vals[i] and vals[maxIdx]",
+         "**Does:** moves the largest remaining value into position `i`. "
+         "**Postcondition:** positions 0..K hold the K+1 largest gradient "
+         "magnitudes in DESCENDING order."),
+        ("29", "float thresh = vals[K < count ? K : count - 1];",
+         "**Does:** the K-th largest magnitude, zero-indexed. Toy layer: "
+         "`vals[2]` = 0.40. "
+         "**Defect D1, mirrored:** paired with a non-strict `>=` in rigLStep() "
+         "this activates K+1 weights. Since DROP also over-selects by one, the "
+         "two cancel and the active count survives - by luck rather than "
+         "design, and the luck runs out when magnitudes tie unevenly."),
+        ("30-31", "free(vals); return thresh;",
+         "**Does:** releases the buffer and returns the threshold. "
+         "**Same purity as Component 1:** no mask mutation, no global state, "
+         "testable with four numbers in an array."),
+    ], "Table 6.1 - Every line of findAbsKthLargestInactive(), with the "
+       "differences from Component 1 called out.")
     box("key", "Why the two guards return opposite extremes",
         "This asymmetry looks like an inconsistency and is in fact the "
         "correct design. The DROP guard returns +inf so that `|w| <= inf` "
@@ -707,31 +876,71 @@ def ch_weightmask():
 
     h2("Line by line")
     explain([
+        ("2", "typedef struct linearConfig {",
+         "**Does:** opens the existing config struct. "
+         "**Warning:** do not retype this struct from either listing in the "
+         "source - sections 11.4 and 39.4 show different field lists and at "
+         "least one is wrong. Open the real header and add the single field."),
+        ("3-6", "weights, bias, hasBias, arithType (existing fields)",
+         "**Does:** nothing new; shown for context. "
+         "**Why they matter here:** `weights` is a `parameter_t`, which bundles "
+         "the value tensor with its gradient tensor. rigLStep() reaches both "
+         "through this one field, which is why the mask can live beside it and "
+         "share a flat index with both."),
         ("7", "tensor_t *weightMask;",
-         "A pointer to a BOOL tensor holding one bit per weight. It is a "
-         "POINTER, not an embedded tensor, so that dense layers pay only 4 "
-         "bytes for the null pointer rather than carrying an unused structure."),
+         "**Does:** adds a pointer to the layer's BOOL mask tensor. "
+         "**Why a pointer and not an embedded tensor_t:** a dense layer then "
+         "pays 4 bytes for a null pointer instead of carrying an unused "
+         "structure, and the mask can be allocated, replaced or freed "
+         "independently of the config. "
+         "**Why in linearConfig_t and not layer_t:** only linear layers support "
+         "RigL in this implementation; putting it in the generic layer struct "
+         "would imply conv and pooling layers have masks too."),
+        ("8", "} linearConfig_t;",
+         "**Does:** closes the struct. "
+         "**Binary compatibility note:** adding a field changes `sizeof` and "
+         "every offset after it. Anything that serializes this struct raw, or "
+         "was compiled against the old header, must be rebuilt."),
         ("11", "cfg->weightMask = NULL;",
-         "The single most important line for backward compatibility. Every "
-         "consumer of this field tests `if (mask != NULL)` before using it, so "
-         "a layer built by existing code behaves exactly as before and no "
-         "existing test changes behaviour. Omitting this line leaves the "
-         "pointer indeterminate and produces crashes that look random."),
-        ("14", "createBoolTensor(outFeatures * inFeatures)",
-         "One bit per weight, bit-packed. The element count must match the "
-         "weight tensor exactly, because every consumer indexes both with the "
-         "same flat index. For the 1152 x 64 layer: 73,728 bits = 9,216 bytes."),
-        ("15", "bernoulliFillMask(mask, 1.0f - targetSparsity)",
-         "Independent Bernoulli draws. Note the argument is the probability of "
-         "being ACTIVE, so for 90% sparsity you pass 0.1, not 0.9 - an easy "
-         "inversion to get wrong, and the symptom is a model that trains fine "
-         "and is nine times slower than expected. Because the draws are "
-         "independent, the realised active count varies slightly around "
-         "0.1 x N rather than being exactly 7,373."),
+         "**Does:** the default, set in `linearInitConfig()`. "
+         "**Why this is the single most important line in the component:** "
+         "every consumer tests `if (mask != NULL)` first, so NULL means "
+         "'behave exactly as before'. That is what makes this change additive - "
+         "no existing model, test or checkpoint changes behaviour. "
+         "**If wrong:** omit it and the pointer is whatever was on the heap. "
+         "The matmul then calls `tensorBoolGet` on garbage and you get a hard "
+         "fault at a random point, in code that looks unrelated."),
+        ("14", "tensor_t *mask = createBoolTensor(outFeatures * inFeatures);",
+         "**Does:** allocates a bit-packed mask with one bit per weight. "
+         "**Why this exact size:** it must equal "
+         "`calcNumberOfElementsByTensor(weights)` exactly, because the matmul, "
+         "the optimiser and rigLStep() all index the mask with the weight's "
+         "flat index. Note the bias is NOT masked - it is a separate tensor and "
+         "biases are left dense. "
+         "**Concretely:** 64 x 1152 = 73,728 bits = 9,216 bytes."),
+        ("15", "bernoulliFillMask(mask, 1.0f - targetSparsity);",
+         "**Does:** fills the mask with independent Bernoulli draws. "
+         "**The inversion trap:** the argument is P(ACTIVE). For 90% sparsity "
+         "you pass 0.1, not 0.9. Passing 0.9 gives a 90% DENSE model that "
+         "trains correctly and is nine times slower than you expected - a bug "
+         "with no error message. "
+         "**Why the realised count is not exact:** independent draws make it "
+         "binomial. For 73,728 weights at p = 0.1 the mean is 7,373 with a "
+         "standard deviation of about 81, so 7,412 active is normal, not a "
+         "fault. If you need exactly the target, shuffle an array with exactly "
+         "that many ones instead."),
         ("16", "cfg->weightMask = mask;",
-         "Attaching the mask is what switches the layer into sparse mode. "
-         "Ownership is now ambiguous - see the note below."),
-    ])
+         "**Does:** attaches the mask, switching the layer into sparse mode. "
+         "**What is missing here:** two things. First, `zeroInactiveWeights()` "
+         "- `bernoulliFillMask` sets bits but does not touch the weights, so "
+         "until you zero them the inactive positions still hold their random "
+         "initial values. Section 38.4 includes that call and section 11.4 does "
+         "not. Second, ownership: nothing records who frees this tensor. "
+         "`linearConfig_t` already has an `ownsQuantizations` flag for exactly "
+         "this kind of question, and the mask needs the same treatment or it "
+         "leaks on every model teardown."),
+    ], "Table 7.1 - Every line of the weightMask change. Two lines of code, "
+       "and both of the notes above are things the source leaves unstated.")
     box("warn", "Two things the source leaves unstated",
         "OWNERSHIP: nothing says who frees this tensor. `linearConfig_t` "
         "already has an `ownsQuantizations` flag for exactly this kind of "
@@ -811,45 +1020,81 @@ def ch_matmul():
 
     h2("Line by line")
     explain([
-        ("2", "for (i = 0; i < aColumns; i++)",
-         "The reduction loop of the matmul: for one output element, sum over "
-         "the shared dimension. This is the hottest loop in the entire library "
-         "- for the HAR layer it executes 73,728 times per sample - which is "
-         "why it is the right place to spend a branch."),
-        ("4", "flatIdx = rowIndex * aColumns + i",
-         "Row-major flat index of the weight being touched. **This line must "
-         "match the mask's element ordering exactly.** The source justifies it: "
-         "weights are stored as [out_neurons, in_neurons] and transposed in "
-         "O(1) before the matmul, so `rowIndex` is the output neuron and `i` "
-         "the input neuron. If that transpose is ever changed to a real data "
-         "movement, or the storage order flips, this index silently addresses "
-         "the wrong mask bit and you get a model that trains to a plausible but "
-         "wrong result."),
-        ("6", "if (weightMask != NULL && ...)",
-         "The null test comes FIRST, and C's short-circuit evaluation "
-         "guarantees `tensorBoolGet` is never called on a null pointer. This "
-         "single test is what lets one matmul serve both dense and sparse "
-         "layers, at the cost of one predictable branch per iteration on dense "
-         "layers."),
-        ("7", "!tensorBoolGet(weightMask, flatIdx)",
-         "Read one bit. Internally this is `(data[idx >> 3] >> (idx & 7)) & 1` "
-         "- a load, a shift and a mask. On an M7 that is roughly 3-4 cycles "
-         "against the 1-cycle fused multiply-add it is protecting, so the "
-         "arithmetic only pays off when the skip rate is high. At 90% sparsity "
-         "it pays handsomely; at 20% sparsity this code is SLOWER than dense."),
+        ("1", "/* Matmul.c - inside matmulFloatCore() */",
+         "**Does:** locates the change. **Why this function:** ODT routes every "
+         "float matrix multiply through this one kernel, so a single edit "
+         "covers the forward pass of every linear layer in every model."),
+        ("2", "for (size_t i = 0; i < aColumns; i++) {",
+         "**Does:** the reduction loop - for one output element, sum over the "
+         "shared dimension. `aColumns` is the number of input features, 1,152 "
+         "for the HAR layer and 4 for the toy layer. "
+         "**Why this loop and not an outer one:** it executes "
+         "outputs x inputs = 73,728 times per sample, which makes it the "
+         "hottest code in the library and the only place where skipping work "
+         "is worth a branch."),
+        ("4", "size_t flatIdx = rowIndex * aColumns + i;",
+         "**Does:** converts the 2-D position (output neuron, input feature) "
+         "into the 1-D index the mask uses. Toy layer, output 1 and input 2: "
+         "1 x 4 + 2 = 6. "
+         "**Why it is correct here:** weights are stored [out, in] row-major "
+         "and transposed in O(1) before the matmul, so `rowIndex` is the output "
+         "neuron and `i` the input. **Why it is fragile:** that O(1) transpose "
+         "is an assumption about the caller. If anyone ever makes it a real "
+         "data movement, or changes the storage order, this line silently "
+         "addresses the wrong bit. "
+         "**If wrong:** no crash. You skip the wrong weights and the model "
+         "trains to a plausible but incorrect result - the worst failure mode "
+         "in this document. Chapter 3 gives the five-minute test that catches "
+         "it."),
+        ("6", "if (weightMask != NULL &&",
+         "**Does:** tests whether this layer is sparse at all. "
+         "**Why NULL-first:** C guarantees left-to-right short-circuit "
+         "evaluation, so `tensorBoolGet` is never reached on a dense layer. "
+         "This one test is what lets a single kernel serve both cases. "
+         "**Cost on dense layers:** one perfectly predicted branch per "
+         "iteration - a fraction of a cycle on an M7 with branch prediction, "
+         "and the price of not maintaining two copies of the kernel."),
+        ("7", "!tensorBoolGet(weightMask, flatIdx))",
+         "**Does:** reads one mask bit; the negation selects INACTIVE weights. "
+         "**What it compiles to:** `(data[idx>>3] >> (idx&7)) & 1` - a byte "
+         "load, a shift and an AND, roughly 3-4 cycles. "
+         "**The break-even calculation:** it is protecting one fused "
+         "multiply-add, about 1 cycle. So the check pays only when it skips "
+         "often. At 90% sparsity you spend 4 cycles to save 9 x 1 - a clear "
+         "win. At 20% sparsity you spend 4 to save 0.25, and the masked kernel "
+         "is SLOWER than the dense one. Sparse is not automatically fast."),
         ("8", "continue;",
-         "Skip the multiply. Note what is not done here: no zero is added, no "
-         "counter incremented. The inactive weight is exactly absent from the "
-         "sum, which is arithmetically identical to multiplying by a stored "
-         "zero but costs nothing."),
-        ("10-11", "readBytesAsFloat(&A->data[aByteIdx])",
-         "The library's alignment-safe float read, used instead of a direct "
-         "pointer dereference because tensor data need not be 4-byte aligned. "
-         "On the M7 an unaligned word load is legal but slower; on stricter "
-         "cores it faults."),
+         "**Does:** skips to the next input feature. "
+         "**Why nothing else happens here:** no zero is accumulated, no counter "
+         "incremented. The inactive weight is simply absent from the sum, which "
+         "is arithmetically identical to multiplying by a stored zero - and "
+         "that equivalence is exactly what the verification test in Chapter 14 "
+         "exploits."),
+        ("10", "float aVal = readBytesAsFloat(&A->data[aByteIdx]);",
+         "**Does:** reads one activation. "
+         "**Why not a direct `*(float*)` dereference:** tensor buffers are not "
+         "guaranteed 4-byte aligned. On a Cortex-M7 an unaligned word load is "
+         "legal but slower; on stricter cores it faults. `readBytesAsFloat` "
+         "does the safe thing."),
+        ("11", "float bVal = readBytesAsFloat(&B->data[bByteIdx]);",
+         "**Does:** reads the corresponding weight. "
+         "**Note:** this is reached only for active weights, so the memory "
+         "traffic of the weight tensor also falls by the sparsity fraction - "
+         "which on a bandwidth-bound device matters as much as the arithmetic "
+         "saved."),
         ("12", "result += aVal * bVal;",
-         "The accumulation, now reached only by active weights."),
-    ])
+         "**Does:** the multiply-accumulate. "
+         "**Why it is one line and not two:** an M7 with the single-precision "
+         "FPU issues a fused multiply-add in one instruction, so the compiler "
+         "should emit VFMA here. If it does not, check that "
+         "`-ffp-contract=fast` is enabled."),
+        ("13", "}",
+         "**Does:** closes the reduction loop. "
+         "**What has changed overall:** at 90% sparsity, nine of every ten "
+         "iterations reach line 8 and stop. The instruction counter should "
+         "report about 7,373 multiply-accumulates instead of 73,728 - the "
+         "measurement that proves this edit is live."),
+    ], "Table 8.1 - Every line of the masked inner loop.")
 
     h2("Plumbing the mask into the kernel")
     p("The listing assumes `weightMask` is in scope inside `matmulFloatCore()`, "
@@ -937,58 +1182,98 @@ def ch_sgd():
 
     h2("Line by line")
     explain([
-        ("1-3", "static void sgdUpdateKernelMasked(...)",
-         "A kernel in the ODT sense: it is invoked through the executeOp funnel "
-         "with an operand array rather than named tensors. `static` keeps it "
-         "file-local. The source presents this as a NEW function alongside the "
-         "existing `sgdUpdateKernel`; adding the mask check to the existing one "
-         "and letting NULL mean dense would avoid the duplication."),
-        ("4-5", "ctx->weightMask",
-         "The mask arrives through the optimiser context, not as an operand. "
-         "That means `sgdUpdateCtx_t` needs a new field and whoever configures "
-         "the optimiser must copy `linearConfig_t.weightMask` into it - a "
-         "plumbing step the source does not spell out and which is easy to "
-         "forget, with the symptom that everything compiles and no masking "
-         "happens."),
-        ("7-9", "param, grad, out as float*",
-         "Three views of the same parameter: current value, its gradient, and "
-         "where the new value is written. `out` and `param` may alias the same "
-         "buffer for an in-place update; nothing here breaks if they do."),
-        ("10", "nElem = calcNumberOfElementsByTensor(rawOut)",
-         "The element count comes from the OUTPUT tensor, and the mask must "
-         "have exactly this many bits. Mismatched counts read past the mask's "
-         "storage - one of the few ways this code can corrupt memory."),
-        ("14", "if (mask != NULL && !tensorBoolGet(mask, i))",
-         "The same NULL-then-bit pattern as the matmul, so dense layers are "
-         "unaffected."),
+        ("1-3", "static void sgdUpdateKernelMasked(tensor_t **op, ...)",
+         "**Does:** declares an ODT kernel - invoked through the executeOp "
+         "funnel with an operand array rather than named tensors. "
+         "**Why `static`:** file-local; the funnel holds the pointer, so no "
+         "external linkage is needed. "
+         "**Design note:** the source presents this as a NEW function beside "
+         "the existing `sgdUpdateKernel`. Adding the mask check to the existing "
+         "one, with NULL meaning dense, would avoid two nearly identical "
+         "kernels drifting apart."),
+        ("4", "const sgdUpdateCtx_t *ctx = ctxv;",
+         "**Does:** recovers the typed context from the funnel's `void *`. "
+         "**Why `const`:** the kernel reads hyperparameters and must not "
+         "mutate them; the qualifier lets the compiler keep `lr` in a register "
+         "across the loop."),
+        ("5", "tensor_t *mask = ctx->weightMask;",
+         "**Does:** fetches the mask from the optimiser context. "
+         "**Why from the context and not the operands:** operands are the "
+         "tensors being updated; the mask is configuration. "
+         "**The plumbing step everyone forgets:** `sgdUpdateCtx_t` needs this "
+         "new field AND something must copy `linearConfig_t.weightMask` into it "
+         "when the optimiser is configured. Miss that and the code compiles, "
+         "runs, and masks nothing."),
+        ("7", "float *param = (float *)op[0]->data;",
+         "**Does:** the current weights. **Why index 0:** the funnel's operand "
+         "ordering convention - parameters first, gradients second."),
+        ("8", "float *grad = (float *)op[1]->data;",
+         "**Does:** the gradients accumulated since the last update."),
+        ("9", "float *out = (float *)rawOut->data;",
+         "**Does:** where the new weights are written. "
+         "**Why a separate pointer:** `out` and `param` MAY alias the same "
+         "buffer for an in-place update. Nothing in this kernel breaks if they "
+         "do, because every element is read before it is written."),
+        ("10", "size_t nElem = calcNumberOfElementsByTensor(rawOut);",
+         "**Does:** the element count, taken from the OUTPUT tensor. "
+         "**If wrong:** the mask must have exactly this many bits. A mismatch "
+         "reads past the mask's storage - one of the few ways this code can "
+         "corrupt memory rather than merely compute the wrong answer."),
+        ("12", "for (size_t i = 0; i < nElem; i++) {",
+         "**Does:** one pass over every parameter. "
+         "**Cost context:** this runs once per optimiser step, not once per "
+         "multiply-accumulate, so unlike the matmul the branch below costs "
+         "nothing worth measuring. The mask check here is about correctness."),
+        ("14", "if (mask != NULL && !tensorBoolGet(mask, i)) {",
+         "**Does:** selects inactive weights. "
+         "**Why the same NULL-first pattern as the matmul:** dense layers must "
+         "behave exactly as before, so that adding RigL cannot regress any "
+         "existing model."),
         ("15", "out[i] = 0.0f;",
-         "Force the weight to exactly zero rather than merely leaving it. "
-         "This is what makes the sparsity real: an inactive weight is not "
-         "approximately zero from weight decay, it is bit-exactly 0.0f. That "
-         "in turn means a serialized model compresses well and the "
-         "mask-skipped matmul is provably equivalent to the dense one."),
+         "**Does:** forces the weight to exactly zero. "
+         "**Why not simply skip the write:** if you `continue` without writing, "
+         "the weight keeps its old value. The masked matmul ignores it, so "
+         "every test still passes - until the model is checkpointed and "
+         "reloaded with a lost or misaligned mask, at which point untrained "
+         "values are suddenly live. Writing the zero puts the invariant in the "
+         "DATA, and the data is what survives serialization."),
         ("16", "grad[i] = 0.0f;",
-         "Clear the gradient after use. In ODT gradients accumulate across "
-         "micro-batches, so without this the inactive positions would carry "
-         "stale sums forward. **But note the tension with RigL:** this line "
-         "runs on every optimiser step, while GROW needs the inactive "
-         "gradients at the rigLStep() boundary. The two only coexist because "
-         "rigLStep() runs BEFORE the optimiser in the same iteration - see "
-         "Chapter 13 and defect D4."),
+         "**Does:** clears the gradient accumulator for this position. "
+         "**Why gradients need clearing at all:** ODT accumulates gradients "
+         "across micro-batches, so without a reset the sums grow without "
+         "bound. "
+         "**The tension with RigL:** this line destroys exactly the signal "
+         "GROW ranks by. It is safe only because rigLStep() runs BEFORE the "
+         "optimiser in the same iteration. Reverse the order and every inactive "
+         "gradient is zero by the time GROW looks - defects D3 and D4."),
         ("17", "continue;",
-         "Skip the arithmetic entirely. Unlike the matmul, the saving here is "
-         "negligible - the optimiser runs once per step, not once per MAC. "
-         "This branch is about CORRECTNESS, not speed."),
-        ("20", "g = grad[i] + ctx->weightDecay * param[i]",
-         "Coupled L2 weight decay, folded into the gradient. Note this is the "
-         "coupled form, not AdamW's decoupled one; for plain SGD the two are "
-         "equivalent up to a factor of the learning rate."),
-        ("21", "out[i] = param[i] - ctx->lr * g",
-         "The SGD step. Momentum, if configured, is applied elsewhere in the "
-         "ODT pipeline - which raises a question the source does not answer: "
-         "the momentum buffer for an inactive weight is never cleared here. "
-         "Chapter 17, defect D5."),
-    ])
+         "**Does:** skips the update arithmetic for this element."),
+        ("18", "}",
+         "**Does:** closes the inactive branch. "
+         "**Missing here:** the momentum buffer. If your SGD carries velocity, "
+         "a regrown weight inherits the velocity it had before it was dropped "
+         "and takes its first step in a stale direction. Clear it in this "
+         "branch. Defect D5."),
+        ("20", "float g = grad[i] + ctx->weightDecay * param[i];",
+         "**Does:** adds L2 weight decay to the gradient. "
+         "**Why COUPLED and not decoupled:** for plain SGD the two formulations "
+         "differ only by a factor of the learning rate, so folding decay into "
+         "the gradient is standard. AdamW is the case where the distinction "
+         "matters, because its adaptive scaling would otherwise divide the "
+         "decay away - see Chapter 10, line 15."),
+        ("21", "out[i] = param[i] - ctx->lr * g;",
+         "**Does:** the gradient descent step. "
+         "**Why this is the whole of SGD:** everything else in this kernel is "
+         "bookkeeping. Momentum, if configured, is applied elsewhere in the ODT "
+         "pipeline, which is why it is not visible - and why it is easy to "
+         "forget when adding the mask."),
+        ("22-23", "} }",
+         "**Does:** closes the loop and the function. "
+         "**Postcondition worth asserting in a test:** after this kernel, every "
+         "position whose mask bit is 0 holds exactly 0.0f in both `out` and "
+         "`grad`. That is a two-line check and it catches most plumbing "
+         "mistakes."),
+    ], "Table 9.1 - Every line of the mask-aware SGD kernel.")
     box("key", "Why forcing the weight to zero matters more than it looks",
         "Suppose you skip line 15 and simply `continue` without writing. The "
         "inactive weight keeps whatever value it had. The masked matmul still "
@@ -1029,40 +1314,101 @@ def ch_adamw():
 
     h2("Line by line - what differs from SGD")
     explain([
-        ("6-7", "m[i] = 0.0f; v[i] = 0.0f;",
-         "The reason this component exists. Consider a weight that RigL drops "
-         "at step 1000 and regrows at step 1500. Without clearing, its `m` and "
-         "`v` still hold the moving averages from before it was dropped. On the "
-         "first step after regrowth, Adam divides a stale `m` by the square "
-         "root of a stale `v` and applies a full-sized update to a weight that "
-         "was just reset to zero - a large, arbitrary jump in a direction "
-         "computed from history that no longer applies."),
-        ("6", "m[i] = 0.0f",
-         "Clearing the first moment means the regrown weight's first update is "
-         "driven purely by its current gradient, exactly as if the parameter "
-         "were newly initialised. Which it is."),
-        ("7", "v[i] = 0.0f",
-         "Clearing the second moment has a subtler effect: because Adam divides "
-         "by sqrt(v) with bias correction, a v of zero makes the first step "
-         "after regrowth approximately +/- the learning rate, the same size any "
-         "fresh parameter would take. A stale large v would instead make the "
-         "weight nearly frozen."),
-        ("12-13", "m and v updates",
-         "The standard exponential moving averages of the gradient and its "
-         "square. Reached only by active weights."),
-        ("14", "param[i] -= lrCorr * m[i] / (sqrtf(v[i]) + eps)",
-         "The Adam step. `lrCorr` folds in the bias corrections for both "
-         "moments so the division happens once rather than twice per element - "
-         "worth doing on an M7 where a float divide is 14 cycles."),
-        ("15", "param[i] -= lr * weightDecay * param[i]",
-         "DECOUPLED weight decay applied to the parameter directly, not to the "
-         "gradient - this is the W in AdamW, and it is a separate line rather "
-         "than folded into `g` precisely so that the adaptive scaling does not "
-         "divide it away."),
-        ("16", "grad[i] = 0.0f",
-         "Reset the accumulator, as in SGD, with the same interaction with the "
-         "GROW step noted in Chapter 9."),
-    ])
+        ("1", "for (size_t i = 0; i < n; i++) {",
+         "**Does:** one pass over every parameter, exactly as in SGD. "
+         "**Why AdamW needs its own kernel at all:** it carries two extra "
+         "per-parameter state tensors, `m` and `v`, and those must be masked "
+         "too - which is the whole reason this component exists separately."),
+        ("3", "if (mask != NULL && !tensorBoolGet(mask, i)) {",
+         "**Does:** selects inactive weights, same NULL-first pattern as "
+         "everywhere else."),
+        ("4", "param[i] = 0.0f;",
+         "**Does:** forces the weight to exactly zero, as in SGD. "
+         "**Why it is written to `param` here and to `out` in the SGD kernel:** "
+         "the AdamW kernel updates in place, so there is no separate output "
+         "tensor. Check which convention your ODT build uses before copying "
+         "either listing."),
+        ("5", "grad[i] = 0.0f;",
+         "**Does:** clears the gradient accumulator. "
+         "**Same tension as SGD line 16:** this destroys the signal GROW needs, "
+         "and is safe only because rigLStep() runs first in the iteration."),
+        ("6", "m[i] = 0.0f;",
+         "**Does:** clears the first-moment estimate - the exponential moving "
+         "average of the gradient. "
+         "**Why this line exists, concretely:** suppose a weight is dropped at "
+         "step 1000 and regrown at step 1500. Without clearing, `m` still holds "
+         "the average gradient from before the drop. On the first step after "
+         "regrowth, Adam applies that stale direction at full size to a weight "
+         "that was just reset to zero - a large, confident step computed from "
+         "history that no longer describes the loss surface. Clearing it means "
+         "the regrown weight's first update comes only from its current "
+         "gradient, exactly as a freshly initialised parameter's would."),
+        ("7", "v[i] = 0.0f;",
+         "**Does:** clears the second-moment estimate - the moving average of "
+         "the squared gradient. "
+         "**Why the effect is subtler than for `m`:** Adam divides by "
+         "sqrt(v_hat), so a stale LARGE v would make the regrown weight almost "
+         "frozen - it would sit at zero and contribute nothing for hundreds of "
+         "steps, quietly wasting the connection RigL just spent budget to "
+         "create. With v cleared, the bias correction makes the first step "
+         "approximately +/- the learning rate, the same size any fresh "
+         "parameter takes."),
+        ("8", "continue;",
+         "**Does:** skips the Adam arithmetic. "
+         "**Also missing here, as in SGD:** nothing resets the step counter "
+         "used for bias correction. Adam's correction terms depend on a global "
+         "`t`, so a regrown weight is treated as if it had been training since "
+         "step 0. With m and v both zero the practical effect is small, but it "
+         "is worth knowing when reading the first update after a grow."),
+        ("9", "}", "**Does:** closes the inactive branch. Everything below is "
+         "reached only by active weights."),
+        ("11", "float g = grad[i];",
+         "**Does:** takes the raw gradient. "
+         "**Note what is NOT added here:** weight decay. Unlike the SGD kernel, "
+         "which folds decay into `g`, AdamW applies it separately on line 15 - "
+         "that separation is the entire difference between Adam and AdamW."),
+        ("12", "m[i] = beta1 * m[i] + (1.0f - beta1) * g;",
+         "**Does:** updates the first moment - an exponential moving average of "
+         "the gradient with beta1, typically 0.9. "
+         "**Intuition:** momentum. It smooths the noisy per-batch gradient into "
+         "a running direction, so that consistent signal accumulates and "
+         "oscillation cancels."),
+        ("13", "v[i] = beta2 * v[i] + (1.0f - beta2) * g * g;",
+         "**Does:** updates the second moment - the moving average of the "
+         "SQUARED gradient, with beta2 typically 0.999. "
+         "**Intuition:** a per-parameter estimate of how large gradients "
+         "usually are here. Dividing by its square root on the next line gives "
+         "every parameter a step size scaled to its own gradient history, which "
+         "is why Adam needs so little tuning across layers of very different "
+         "magnitudes."),
+        ("14", "param[i] -= lrCorr * m[i] / (sqrtf(v[i]) + eps);",
+         "**Does:** the Adam step. "
+         "**Why `lrCorr` rather than `lr`:** it folds in both bias corrections, "
+         "1/(1-beta1^t) and 1/(1-beta2^t), so the division happens once per "
+         "element instead of twice - worth doing on an M7 where a float divide "
+         "costs about 14 cycles. "
+         "**Why `+ eps` and not a zero check:** v is zero for a parameter that "
+         "has never seen a gradient - including every weight RigL just grew - "
+         "so without eps this divides by zero on the first step after every "
+         "single grow."),
+        ("15", "param[i] -= lr * weightDecay * param[i];",
+         "**Does:** decoupled weight decay, applied to the parameter directly. "
+         "**Why it is a separate line and not folded into `g`:** if decay went "
+         "through the gradient it would be divided by sqrt(v) along with "
+         "everything else, so parameters with large gradients would be barely "
+         "regularised and parameters with small ones heavily. Keeping it "
+         "outside the adaptive scaling is the W in AdamW, and it reliably "
+         "improves generalisation."),
+        ("16", "grad[i] = 0.0f;",
+         "**Does:** resets the accumulator for the next micro-batch, on the "
+         "ACTIVE path this time."),
+        ("17", "}", "**Does:** closes the loop. "
+         "**Memory reality check:** this kernel touches four dense float "
+         "tensors per layer - param, grad, m, v - which for the HAR 1152 x 64 "
+         "layer is 1.13 MB. That does not fit in 320 KB, whatever the sparsity, "
+         "because m and v are allocated densely regardless of the mask. Defect "
+         "D6."),
+    ], "Table 10.1 - Every line of the mask-aware AdamW update.")
     box("note", "Also clear the SGD momentum buffer",
         "Section 13.4 correctly identifies stale moments as a hazard for AdamW "
         "and says nothing about SGD with momentum, which has exactly the same "
@@ -1159,93 +1505,232 @@ def ch_riglstep():
 
     h2("Line by line")
     explain([
-        ("1-2", "rigLStep(model, numLayers, sparsityTarget, step, totalSteps)",
-         "Operates on the whole model, not one layer, so a single call updates "
-         "every sparse layer. Note `sparsityTarget` is accepted and NEVER USED "
-         "in the body - the actual sparsity is whatever the mask already "
-         "encodes, and the function only preserves it. That is not a bug, but "
-         "it is a misleading signature: a reader assumes passing 0.9 sets the "
-         "sparsity, when in fact it is set once at initialisation by "
-         "bernoulliFillMask()."),
-        ("5", "prog = step / (totalSteps > 0 ? totalSteps : 1)",
-         "Training progress in [0, 1]. The ternary guards against a "
-         "divide-by-zero when the caller does not know the total step count. "
-         "Both operands are cast to float first; integer division here would "
-         "make prog 0 for the entire run."),
-        ("6", "alpha = 0.3f * 0.5f * (1 + cosf(pi * prog))",
-         "The cosine decay. At prog = 0, cos(0) = 1 so alpha = 0.3; at prog = "
-         "1, cos(pi) = -1 so alpha = 0. Two things are hard-coded that should "
-         "not be: the initial alpha of 0.3, and the assumption that the mask "
-         "freezes at the END of training. Section 2.3 specifies T_end = 80% of "
-         "total steps, so the caller must pass `totalSteps * 0.8` here rather "
-         "than the true total - an easy mistake that leaves the mask still "
-         "swapping during the final epochs. Chapter 17, defect D9."),
+        ("1", "void rigLStep(layer_t **model,",
+         "**Does:** declares the entry point. Returns `void` - the function "
+         "reports nothing and mutates the model in place. "
+         "**Why:** `layer_t **` is an array of layer pointers, the same "
+         "representation the training loop already holds, so no conversion is "
+         "needed at the call site. "
+         "**If wrong:** passing a `layer_t *` (array of structs) instead of "
+         "`layer_t **` compiles with a warning and then walks memory at the "
+         "wrong stride."),
+        ("2", "size_t numLayers, float sparsityTarget,",
+         "**Does:** the layer count and, nominally, the target sparsity. "
+         "**Why:** `numLayers` is needed because C arrays carry no length. "
+         "**Note:** `sparsityTarget` is **never read in the body**. Sparsity is "
+         "fixed once by `bernoulliFillMask()` at initialisation; this function "
+         "only preserves whatever the mask already encodes. The parameter is "
+         "misleading and should be removed or honoured."),
+        ("2", "size_t step, size_t totalSteps) {",
+         "**Does:** the current global step and the schedule horizon. "
+         "**Why:** the pair defines training progress, which drives alpha. "
+         "**If wrong:** passing the true total instead of 0.8 x total leaves "
+         "alpha non-zero into the final epoch, so connections are still being "
+         "swapped when there is no time left to train them - defect D9."),
+        ("4", "/* Cosine decay of the swap fraction. */",
+         "**Does:** nothing at runtime. **Why:** marks the boundary between the "
+         "schedule computation, which is per-call, and the per-layer loop that "
+         "follows."),
+        ("5", "float prog = (float)step / (float)(totalSteps > 0 ? ... : 1);",
+         "**Does:** training progress as a fraction in [0, 1]. "
+         "**Why:** both operands are cast to `float` FIRST. `step/totalSteps` "
+         "in integer arithmetic would be 0 for the entire run except the last "
+         "step, making alpha constant at alphaInit and the mask thrash until "
+         "training ended. The ternary guards a caller that passes 0. "
+         "**If wrong:** dropping either cast is the single most likely silent "
+         "bug in this function - it compiles, runs, and produces a schedule "
+         "that never decays."),
+        ("6", "float alpha = 0.3f * 0.5f * (1.0f + cosf(3.14159265f * prog));",
+         "**Does:** evaluates alpha(t) = (alphaInit/2)(1 + cos(pi t / T_end)). "
+         "At prog=0, cos(0)=1 so alpha=0.3; at prog=1, cos(pi)=-1 so alpha=0. "
+         "**Why the halving:** cos ranges over [-1, 1], so (1+cos) ranges over "
+         "[0, 2]; multiplying by 0.5 brings it to [0, 1] and by 0.3 to "
+         "[0, 0.3]. **Why cosine and not linear:** the derivative is zero at "
+         "both ends, so the swap rate changes slowly at the start (while the "
+         "network is still finding structure) and slowly at the end (while it "
+         "settles), and fastest in the middle. "
+         "**Note:** 0.3f and the constant pi are hard-coded; both belong in "
+         "parameters."),
+        ("8", "for (size_t l = 0; l < numLayers; l++) {",
+         "**Does:** iterates every layer of the model. "
+         "**Why:** one call updates the whole model, so the training loop needs "
+         "a single line rather than a loop of its own. Note that alpha is "
+         "computed once, outside this loop - every layer swaps the same "
+         "FRACTION, not the same COUNT."),
         ("10", "if (model[l]->type != LINEAR) continue;",
-         "Only linear layers are considered. Conv1d layers are skipped entirely "
-         "even if section 20.4 describes a kernelMask for them - so on a "
-         "conv-plus-linear model, RigL touches only the classifier head."),
-        ("13-14", "mask = cfg->weightMask; if (mask == NULL) continue;",
-         "The dense-layer escape. Together with line 10 this means rigLStep() "
-         "is safe to call on any model, including a fully dense one, where it "
-         "does nothing at all. That is a good property: the training loop needs "
-         "no conditional."),
-        ("16-17", "weights = cfg->weights->param; grads = cfg->weights->grad;",
-         "The parameter and its gradient live in the same `parameter_t`. RigL "
-         "needs both: weights for the DROP decision, gradients for GROW."),
-        ("19-20", "float *w, *g",
-         "Direct float access again, with the same FLOAT32-only limitation "
-         "noted in Chapter 5. Under FQT these tensors may be SYM_INT32."),
-        ("22-24", "count numActive",
-         "A third full pass over the mask, after the two that "
-         "findAbsKthSmallestActive() will do internally. Caching this count in "
-         "the layer config would remove three O(n) passes per RigL step, though "
-         "at 100-step intervals it hardly matters."),
-        ("26", "K = (size_t)(alpha * (float)numActive)",
-         "The swap size: a fraction of the ACTIVE weights, matching section "
-         "2.2's `alpha * (1-s) * N` since numActive is (1-s)*N. The cast "
-         "truncates toward zero, which is the intended floor()."),
+         "**Does:** skips anything that is not a fully connected layer. "
+         "**Why this is not optional:** `config` is a UNION. Reading "
+         "`->linear` on a Conv1d layer does not fail - it reinterprets those "
+         "bytes as a `linearConfig_t` and hands you a garbage `weightMask` "
+         "pointer that will be dereferenced two lines later. "
+         "**Consequence:** conv kernels are never sparsified, even though "
+         "section 20.4 of the source describes a `kernelMask` for them."),
+        ("12", "linearConfig_t *cfg = model[l]->config->linear;",
+         "**Does:** narrows the union to the linear view. "
+         "**Why:** every field this function needs - the mask, the weights, the "
+         "gradients - hangs off this one pointer, so it is worth naming once "
+         "rather than repeating the chain."),
+        ("13", "tensor_t *mask = cfg->weightMask;",
+         "**Does:** fetches the layer's mask. "
+         "**Why:** this single field is what distinguishes a sparse layer from "
+         "a dense one; everything below branches on it."),
+        ("14", "if (mask == NULL) continue;",
+         "**Does:** skips dense layers. "
+         "**Why:** combined with line 10, this makes `rigLStep()` safe to call "
+         "on any model at all - including a fully dense one, where it does "
+         "nothing. That is what lets the training loop call it "
+         "unconditionally. **If wrong:** omitting it dereferences NULL on the "
+         "first dense layer, which at least fails loudly."),
+        ("16", "tensor_t *weights = cfg->weights->param;",
+         "**Does:** the weight tensor. **Why:** DROP ranks by |weight|, so this "
+         "is the DROP input. Note `cfg->weights` is a `parameter_t`, which "
+         "bundles the values and their gradients - line 17 takes the other "
+         "half."),
+        ("17", "tensor_t *grads = cfg->weights->grad;",
+         "**Does:** the gradient tensor, filled by the backward pass of this "
+         "same iteration. **Why:** GROW ranks by |gradient|. "
+         "**Critical:** these gradients must be present for INACTIVE weights, "
+         "which means the weight-gradient matmul must not be masked and the "
+         "optimiser must not have run yet. This one line is where defect D3 "
+         "bites."),
+        ("18", "size_t n = calcNumberOfElementsByTensor(weights);",
+         "**Does:** the element count - 73,728 for the HAR layer, 8 for the toy "
+         "layer of Chapter 2. **Why:** every loop below runs over it, and the "
+         "mask must have exactly this many bits. **If wrong:** a mask sized "
+         "differently from the weights reads past its own buffer."),
+        ("19", "float *w = (float *)weights->data;",
+         "**Does:** a raw float view of the weights. "
+         "**Why:** the tensor accessors would cost a function call per element "
+         "inside three O(n) loops. **If wrong:** valid ONLY for FLOAT32. Under "
+         "FQT the tensor holds int32 mantissas, and this cast reinterprets "
+         "their bit patterns as floats - producing magnitudes with no relation "
+         "to the real weights, so DROP selects essentially at random."),
+        ("20", "float *g = (float *)grads->data;",
+         "**Does:** the same for gradients. **Why and if wrong:** identical to "
+         "line 19; in ODT the gradient tensor is if anything MORE likely to be "
+         "SYM_INT32 than the weight tensor."),
+        ("22", "size_t numActive = 0;",
+         "**Does:** initialises the active-weight counter. "
+         "**Why:** the count is not stored anywhere - the mask is the only "
+         "record of it, so it must be recomputed each time."),
+        ("23-24", "for (i...) if (tensorBoolGet(mask, i)) numActive++;",
+         "**Does:** counts set bits. For the toy layer: 4. For the HAR layer at "
+         "initialisation: about 7,412. "
+         "**Why:** K is a fraction of the ACTIVE count, not of n. "
+         "**Cost:** this is the third full pass over the mask in this function "
+         "and `findAbsKthSmallestActive()` will make two more; caching the "
+         "count in the layer config would remove three O(n) scans per step."),
+        ("26", "size_t K = (size_t)(alpha * (float)numActive);",
+         "**Does:** how many weights to swap. Toy layer: 0.5 x 4 = 2. HAR at "
+         "step 0: 0.3 x 7,412 = 2,223. "
+         "**Why the cast:** truncation toward zero implements the floor() of "
+         "the published algorithm. "
+         "**Why active and not n:** section 2.2 defines K = alpha (1-s) N, and "
+         "numActive IS (1-s)N - so this matches, and it also means K shrinks "
+         "automatically if sparsity ever drifts."),
         ("27", "if (K == 0) continue;",
-         "Once alpha decays far enough that K rounds to zero, the layer is "
-         "frozen. This is how the mask stops evolving without any explicit "
-         "end-of-schedule test."),
-        ("30", "dropThresh = findAbsKthSmallestActive(weights, mask, K)",
-         "Component 1. Computed BEFORE the loop that uses it, so the threshold "
-         "reflects the mask as it was at the start of this step."),
-        ("32", "if (tensorBoolGet(mask,i) && fabsf(w[i]) <= dropThresh)",
-         "The DROP test. Non-strict `<=` combined with a zero-indexed K-th "
-         "value drops K+1 weights, and drops MORE than that when magnitudes "
-         "tie - which is common, because every weight that was grown but never "
-         "updated is still exactly 0.0. Chapter 17, defect D1."),
-        ("33-34", "tensorBoolSet(mask,i,false); w[i] = 0.0f;",
-         "Deactivate and zero. Writing the zero here rather than waiting for "
-         "the optimiser means the invariant holds immediately, which matters "
-         "because the GROW loop that follows reads these same weights."),
-        ("39", "growThresh = findAbsKthLargestInactive(grads, mask, K)",
-         "Component 2 - and note WHEN it is called: after the DROP loop has "
-         "already modified the mask. The weights just dropped are now inactive, "
-         "so they are candidates for immediate regrowth. If one of them has a "
-         "large gradient - which is entirely possible, since a weight can be "
-         "small in magnitude yet have a steep gradient - it is dropped and "
-         "regrown in the same step, wasting part of the swap budget and "
-         "resetting a trained weight to zero for no benefit. The published "
-         "algorithm excludes the just-dropped set from growth candidates. "
-         "Chapter 17, defect D2."),
-        ("41", "if (!tensorBoolGet(mask,i) && fabsf(g[i]) >= growThresh)",
-         "The GROW test, with the mirror of defect D1: non-strict `>=` grows "
-         "K+1. Because DROP also removes K+1, the total active count is "
-         "preserved - the two errors cancel. That is luck, not design, and the "
-         "cancellation fails as soon as ties are unevenly distributed."),
-        ("42-43", "tensorBoolSet(mask,i,true); w[i] = 0.0f;",
-         "Activate at zero, exactly as the RigL paper specifies. A grown "
-         "connection starts with no contribution and must earn its value from "
-         "gradients - which is why the mask has to stop changing well before "
-         "the end of training, or late arrivals never get the chance."),
-        ("47-48", "if (!tensorBoolGet(mask,i)) g[i] = 0.0f;",
-         "Clear the gradients of everything still inactive. This prevents stale "
-         "gradient values from influencing the NEXT rigLStep() - without it, a "
-         "weight that had a large gradient a thousand steps ago would keep "
-         "looking attractive forever."),
-    ])
+         "**Does:** skips the layer once the swap size rounds to zero. "
+         "**Why:** this is how the mask freezes at the end of the schedule - "
+         "there is no separate end-of-schedule test. It also protects "
+         "`findAbsKthSmallestActive(..., 0)` from being asked for a "
+         "zeroth-smallest element."),
+        ("29", "/* ---- DROP: deactivate the K smallest |w| ---- */",
+         "**Does:** nothing at runtime, but marks the first of the three phases "
+         "- DROP, GROW, clear - that every reader should be able to name."),
+        ("30", "float dropThresh = findAbsKthSmallestActive(weights, mask, K);",
+         "**Does:** computes the DROP threshold using Component 1. Toy layer: "
+         "0.30. **Why it is computed BEFORE the loop:** the threshold must "
+         "describe the mask as it was at the start of the step. Recomputing it "
+         "inside the loop would make each decision depend on the previous "
+         "ones."),
+        ("31", "for (size_t i = 0; i < n; i++) {",
+         "**Does:** walks every weight, active or not. "
+         "**Why not just the active ones:** there is no list of active indices "
+         "- the mask is a bitmap, so finding them requires this scan anyway."),
+        ("32", "if (tensorBoolGet(mask, i) && fabsf(w[i]) <= dropThresh) {",
+         "**Does:** selects active weights at or below the threshold. "
+         "**Why the mask test first:** short-circuit evaluation skips the "
+         "`fabsf` for the 90% of weights that are inactive. "
+         "**If wrong - and it is wrong as written:** the non-strict `<=` "
+         "combined with a zero-indexed K-th value selects K+1 weights, and "
+         "more when magnitudes tie. In the toy layer it drops index 4 "
+         "(|w| = 0.30 = the threshold) which should have survived. Use a "
+         "strict `<`. Defect D1."),
+        ("33", "tensorBoolSet(mask, i, false);",
+         "**Does:** clears the mask bit - the connection is now inactive. "
+         "**Why here rather than in a second pass:** the GROW loop that follows "
+         "reads this same mask, so the DROP must be complete first."),
+        ("34", "w[i] = 0.0f;",
+         "**Does:** zeroes the weight itself. "
+         "**Why it matters more than it looks:** without it the value survives "
+         "in the tensor, invisible because the matmul skips it - until the "
+         "model is serialized and reloaded with a lost or misaligned mask, at "
+         "which point untrained values come back to life. Writing the zero "
+         "puts the invariant in the DATA, and the data is what persists."),
+        ("35-36", "} }",
+         "**Does:** closes the conditional and the DROP loop. At this point the "
+         "layer is temporarily BELOW its target density - the toy layer has 2 "
+         "active weights instead of 4."),
+        ("38", "/* ---- GROW: activate K largest |g| among inactive ---- */",
+         "**Does:** marks phase two. **Why the order matters:** DROP frees the "
+         "budget that GROW spends. Reversing them would push the layer above "
+         "target density before trimming it back."),
+        ("39", "float growThresh = findAbsKthLargestInactive(grads, mask, K);",
+         "**Does:** computes the GROW threshold using Component 2. Toy layer: "
+         "0.40. "
+         "**If wrong - and it is:** `mask` here is the POST-drop mask, so the "
+         "K weights just deactivated are candidates for immediate reactivation. "
+         "In the toy layer index 1 is dropped for |w| = 0.05 and instantly "
+         "regrown for |g| = 0.85, destroying a trained value and consuming "
+         "part of the swap budget. Pass a snapshot of the pre-drop mask. "
+         "Defect D2."),
+        ("40", "for (size_t i = 0; i < n; i++) {",
+         "**Does:** a second full scan. **Why a separate loop:** the threshold "
+         "on line 39 must see the completed DROP, so the two phases cannot be "
+         "fused into one pass."),
+        ("41", "if (!tensorBoolGet(mask, i) && fabsf(g[i]) >= growThresh) {",
+         "**Does:** selects inactive weights whose gradient is at or above the "
+         "threshold. **Why gradient and not weight:** an inactive weight is "
+         "zero, so its magnitude carries no information; its GRADIENT says how "
+         "much the loss would fall if it were switched on. This is the entire "
+         "idea of RigL in one condition. "
+         "**If wrong:** the non-strict `>=` mirrors defect D1 and grows K+1. "
+         "The two errors cancel in the count, which is luck rather than "
+         "design."),
+        ("42", "tensorBoolSet(mask, i, true);",
+         "**Does:** sets the mask bit - the connection is live from the next "
+         "forward pass onward."),
+        ("43", "w[i] = 0.0f;    /* grow at zero */",
+         "**Does:** starts the new connection at exactly zero. "
+         "**Why not at a random value:** the network is mid-convergence; "
+         "injecting an arbitrary weight is a perturbation with no justification. "
+         "Starting at zero means the connection contributes nothing at first "
+         "and is shaped entirely by gradients - it earns its value. "
+         "**Consequence:** a grown weight needs time to become useful, which is "
+         "exactly why the mask must freeze well before training ends."),
+        ("44-45", "} }",
+         "**Does:** closes the GROW loop. Density is now back at target - the "
+         "toy layer has 4 active weights again, at positions {0, 4, 5, 7}."),
+        ("47", "/* ---- Zero gradients of still-inactive weights ---- */",
+         "**Does:** marks phase three, the one most readers skip."),
+        ("48-49", "for (i...) if (!tensorBoolGet(mask,i)) g[i] = 0.0f;",
+         "**Does:** clears the gradient of every weight that remains inactive. "
+         "**Why:** without it, a weight that once had a large gradient keeps "
+         "that stale value and looks permanently attractive to every future "
+         "GROW step, so the same few positions would be selected again and "
+         "again. **Interaction:** these gradients will be refilled by the next "
+         "backward pass, which is why the dense weight-gradient matmul is "
+         "non-negotiable."),
+        ("50", "}",
+         "**Does:** closes the per-layer loop. Each layer is handled "
+         "independently and shares only the alpha computed on line 6."),
+        ("51", "}",
+         "**Does:** end of function. Nothing is returned and nothing is "
+         "allocated, so there is nothing for the caller to clean up - which is "
+         "why the D2 fix in Appendix A has to be careful to free the mask "
+         "snapshot it introduces."),
+    ], "Table 11.1 - Every line of rigLStep(). Values quoted as 'toy layer' "
+       "refer to the 8-weight example computed in Chapter 2.")
 
     h2("What one call actually does, in order")
     diagram([
@@ -1314,52 +1799,108 @@ def ch_serialize():
 
     h2("Line by line")
     explain([
-        ("3", "if (mask == NULL || quantization->type != BOOL)",
-         "Two guards in one: no mask at all, or a tensor that is not a bit "
-         "mask. The second catches the case where some other tensor type is "
-         "attached by mistake - it degrades to 'no mask' rather than writing "
-         "garbage of the wrong length into the checkpoint."),
-        ("4-6", "write a zero byte and return",
-         "The presence flag. Writing one byte even in the dense case is what "
-         "keeps the file format self-describing: the reader always consumes "
-         "exactly one byte here and knows from its value whether more "
-         "follows."),
-        ("9-10", "write a one byte",
-         "Mask present. Note the flag is written BEFORE the data, so a reader "
-         "streaming the file never has to seek."),
-        ("12", "n = calcNumberOfElementsByTensor(mask)",
-         "The number of BITS, since a BOOL tensor's element count is its bit "
-         "count."),
-        ("13", "bytes = (n + 7) / 8",
-         "Ceiling division: 73,728 bits gives exactly 9,216 bytes; 73,730 bits "
-         "would give 9,217 with the last byte partly unused. The idiom `(n+7)/8` "
-         "avoids floating point and is exact for all n."),
-        ("14", "fwrite(mask->data, 1, bytes, fp)",
-         "Write the packed bits verbatim. **This makes the checkpoint "
-         "endian- and layout-dependent:** it stores the in-memory bit order "
-         "directly, so a file written by the host trainer is only portable to "
-         "the MCU if both pack bits identically. Since ODT defines "
-         "tensorBoolGet as `(data[i>>3] >> (i&7)) & 1` on both, they do - but "
-         "the assumption is undocumented and worth a comment in the code."),
-        ("18", "tensor_t *deserializeSparsity(size_t n, FILE *fp)",
-         "The reader takes `n` as an argument because the bit count is not "
-         "stored in this record - it is implied by the weight tensor that "
-         "precedes it. That coupling is fragile but compact; the alternative is "
-         "four more bytes per layer."),
-        ("21-22", "read the flag; return NULL if zero",
-         "NULL is the correct 'dense' value, matching the default set in "
-         "Component 3 - so a dense checkpoint loads into a dense layer with no "
-         "special case."),
-        ("24", "mask = allocBoolTensor(n)",
-         "Allocate before reading. The caller becomes the owner and must attach "
-         "it to `cfg->weightMask` and eventually free it - the same ownership "
-         "question raised in Chapter 7, now with a second place to leak."),
-        ("26", "fread(mask->data, 1, bytes, fp)",
-         "Read the packed bits back. Neither this call nor the fwrite above "
-         "checks its return value; a truncated file yields a partly-initialised "
-         "mask and no error. On an embedded target reading from an SD card, "
-         "that check is not optional."),
-    ])
+        ("1", "void serializeSparsity(tensor_t *mask, FILE *fp) {",
+         "**Does:** writes one mask to an open file. "
+         "**Why it takes the mask as a parameter:** the original stub took no "
+         "arguments, which is why it could not work. The mask lives on the "
+         "layer config, so the caller - `serializeLinear()` - must pass it "
+         "down. **Why `FILE *` and not a buffer:** ODT checkpoints stream to "
+         "disk or SD card; buffering a 294 KB tensor first would need memory "
+         "the MCU does not have."),
+        ("3", "if (mask == NULL || mask->quantization->type != BOOL) {",
+         "**Does:** two guards in one. NULL means a dense layer; a non-BOOL "
+         "tensor means something else was attached by mistake. "
+         "**Why the second check matters:** without it, attaching a FLOAT32 "
+         "tensor by accident would write `(n+7)/8` bytes of float data as if it "
+         "were a mask - a file that loads without error and produces a "
+         "meaningless mask. Failing safe to 'no mask' is the right degradation."),
+        ("4", "uint8_t noMask = 0;",
+         "**Does:** the presence flag, cleared. "
+         "**Why `uint8_t` and not `int`:** the file format is byte-exact and "
+         "must not depend on the host's `int` width or endianness."),
+        ("5", "fwrite(&noMask, 1, 1, fp);",
+         "**Does:** writes one zero byte. "
+         "**Why write anything at all for a dense layer:** so the reader always "
+         "consumes exactly one byte here and learns from its value whether more "
+         "follows. A format where a field is sometimes absent cannot be parsed "
+         "without out-of-band knowledge. "
+         "**Not checked:** the return value. A full disk or a failed SD write "
+         "silently truncates the checkpoint."),
+        ("6", "return;", "**Does:** ends the dense case. The record is exactly "
+         "one byte."),
+        ("9", "uint8_t hasMask = 1;",
+         "**Does:** the presence flag, set."),
+        ("10", "fwrite(&hasMask, 1, 1, fp);",
+         "**Does:** writes it. "
+         "**Why the flag precedes the data:** a streaming reader never has to "
+         "seek backwards - it reads one byte, then knows exactly how many "
+         "follow."),
+        ("12", "size_t n = calcNumberOfElementsByTensor(mask);",
+         "**Does:** the number of BITS, since a BOOL tensor's element count is "
+         "its bit count. "
+         "**Why n is not written to the file:** it is implied by the weight "
+         "tensor that precedes this record. That saves four bytes per layer and "
+         "couples the two records - a trade the format makes deliberately, and "
+         "the reason `deserializeSparsity()` takes n as an argument."),
+        ("13", "size_t bytes = (n + 7) / 8;",
+         "**Does:** ceiling division - how many whole bytes hold n bits. "
+         "**Why `(n+7)/8` and not `ceil(n/8.0)`:** exact integer arithmetic, no "
+         "floating point, no rounding surprises, and it is the standard C "
+         "idiom. For 73,728 bits it gives exactly 9,216; for 73,730 it would "
+         "give 9,217 with six bits of the last byte unused."),
+        ("14", "fwrite(mask->data, 1, bytes, fp);",
+         "**Does:** writes the packed bit array verbatim. "
+         "**What this bakes into the format:** the in-memory bit order. A file "
+         "written by the host trainer is readable on the MCU only if both pack "
+         "bits identically. ODT defines `tensorBoolGet` as "
+         "`(data[i>>3] >> (i&7)) & 1` on both, so they do - but that agreement "
+         "is undocumented and deserves a comment here, because it is the kind "
+         "of assumption that breaks silently when someone optimises the "
+         "accessor."),
+        ("15", "}", "**Does:** ends the write path. Total cost for the HAR "
+         "layer: 9,217 bytes, against 294,912 for the weights - about 3%."),
+        ("18", "tensor_t *deserializeSparsity(size_t n, FILE *fp) {",
+         "**Does:** the reader. **Why it returns a tensor rather than filling "
+         "one:** the caller does not know whether a mask exists until the flag "
+         "is read, so allocation has to happen here. **Consequence:** the "
+         "caller owns the result and must attach it to `cfg->weightMask` and "
+         "eventually free it - the second place in this implementation where "
+         "mask ownership is undefined."),
+        ("20", "uint8_t hasMask = 0;",
+         "**Does:** initialises the flag. **Why initialising matters:** if the "
+         "`fread` on the next line fails, this stays 0 and the function returns "
+         "NULL - degrading to a dense layer rather than acting on a garbage "
+         "flag."),
+        ("21", "fread(&hasMask, 1, 1, fp);",
+         "**Does:** reads the presence byte. "
+         "**Not checked:** the return value again. A truncated file yields a "
+         "partly-initialised mask and no error, which on an embedded target "
+         "reading from an SD card is not a theoretical risk."),
+        ("22", "if (!hasMask) return NULL;",
+         "**Does:** returns NULL for a dense layer. "
+         "**Why NULL is exactly right:** it matches the default set in "
+         "Component 3, so a dense checkpoint loads into a dense layer with no "
+         "special case anywhere."),
+        ("24", "tensor_t *mask = allocBoolTensor(n);",
+         "**Does:** allocates a bit-packed tensor of n bits. "
+         "**Why n comes from the caller:** as noted on line 12, the bit count "
+         "is not in the file - the caller derives it from the weight tensor it "
+         "just read."),
+        ("25", "size_t bytes = (n + 7) / 8;",
+         "**Does:** the same ceiling division as the writer. "
+         "**Why it must be the same expression:** writer and reader compute the "
+         "record length independently. If they ever disagree - say one uses "
+         "n/8 - every subsequent record in the file is misaligned, and the "
+         "failure appears in a completely different layer."),
+        ("26", "fread(mask->data, 1, bytes, fp);",
+         "**Does:** reads the packed bits straight into the tensor's buffer."),
+        ("27", "return mask;",
+         "**Does:** hands ownership to the caller. "
+         "**What the caller must then do:** assign it to `cfg->weightMask`, and "
+         "- worth asserting - check that the restored active count matches what "
+         "was saved. A mask that loads with the wrong bit order still yields a "
+         "plausible sparsity while being a completely different network."),
+    ], "Table 12.1 - Every line of mask serialization and deserialization.")
 
     h2("Wiring it into the tensor record")
     listing([
