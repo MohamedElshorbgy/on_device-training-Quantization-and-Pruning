@@ -190,7 +190,7 @@ def front():
     p("The code in this document is the code from the source, transcribed "
       "faithfully. Where the source contains an error, the error is reproduced "
       "in the listing and then flagged in the line-by-line table and in "
-      "Chapter 12, rather than silently corrected - you need to know what the "
+      "Chapter 17, rather than silently corrected - you need to know what the "
       "original said. Corrected versions are given separately, and always "
       "marked as corrections.")
     box("warn", "Nine defects were found during extraction",
@@ -200,8 +200,8 @@ def front():
         "rigLStep(); one memory figure is wrong by a factor of 250; the DROP "
         "and GROW steps as written do not preserve the exact-K conservation "
         "the algorithm depends on; and the gradient the GROW step needs is "
-        "zeroed by another component before GROW can use it. Chapter 12 lists "
-        "all nine with a proposed fix for each. Read it before you implement.")
+        "zeroed by another component before GROW can use it. Chapter 17 lists "
+        "all ten with a proposed fix for each. Read it before you implement.")
 
     h3("Build order")
     diagram([
@@ -331,7 +331,7 @@ def ch_algorithm():
         "The ResNet-50 rows are published results quoted by the source. The HAR "
         "row is described in the source as an estimate, and it is repeated here "
         "as one. Nothing in this document reports a measurement taken on the "
-        "STM32 target; when you run it, the numbers in Chapter 11 are the ones "
+        "STM32 target; when you run it, the numbers in Chapters 14 and 15 are the ones "
         "to fill in.")
 
 
@@ -357,18 +357,18 @@ def ch_component_map():
           "needs"]],
         widths=[32, 68], bold_first=True)
     tbl(["Missing - must be built", "File", "This document"],
-        [["findAbsKthSmallestActive()", "MinMax.c", "Chapter 3"],
-         ["findAbsKthLargestInactive()", "MinMax.c", "Chapter 4"],
-         ["weightMask field in linearConfig_t", "Linear.h", "Chapter 5"],
-         ["Mask-aware inner loop", "Matmul.c", "Chapter 6"],
-         ["Mask-aware parameter update", "Sgd.c", "Chapter 7"],
-         ["Mask-aware update with moment clearing", "AdamW.c", "Chapter 8"],
-         ["rigLStep()", "RigL.h / RigL.c (new)", "Chapter 9"],
+        [["findAbsKthSmallestActive()", "MinMax.c", "Chapter 5"],
+         ["findAbsKthLargestInactive()", "MinMax.c", "Chapter 6"],
+         ["weightMask field in linearConfig_t", "Linear.h", "Chapter 7"],
+         ["Mask-aware inner loop", "Matmul.c", "Chapter 8"],
+         ["Mask-aware parameter update", "Sgd.c", "Chapter 9"],
+         ["Mask-aware update with moment clearing", "AdamW.c", "Chapter 10"],
+         ["rigLStep()", "RigL.h / RigL.c (new)", "Chapter 11"],
          ["serializeSparsity() / deserializeSparsity()", "Serialize.c",
-          "Chapter 10"],
-         ["Mask creation for sparse layers", "UserAPI.c", "Chapter 11"],
+          "Chapter 12"],
+         ["Mask creation for sparse layers", "UserAPI.c", "Chapter 13"],
          ["rigLStep() call site and config fields", "TrainingLoopApi.c",
-          "Chapter 11"]],
+          "Chapter 13"]],
         widths=[46, 30, 24], bold_first=True)
     box("note", "Seven, eight or ten components?",
         "The source says seven. That count omits deserializeSparsity() - "
@@ -409,7 +409,7 @@ def ch_kth_smallest():
       "**active** weights of a layer. This single number is the DROP "
       "threshold: every active weight whose magnitude is at or below it will "
       "be deactivated. **Depends on:** nothing. **Used by:** rigLStep() "
-      "(Chapter 9). This is the first thing to implement and the easiest to "
+      "(Chapter 11). This is the first thing to implement and the easiest to "
       "unit-test.")
     listing([
         "float findAbsKthSmallestActive(tensor_t *weights,",
@@ -512,7 +512,7 @@ def ch_kth_smallest():
          "The K-th smallest magnitude, zero-indexed - so this is actually the "
          "(K+1)-th smallest value. The ternary is redundant given line 12 but "
          "makes the function safe if that guard is ever changed. **This line "
-         "is where defect D1 in Chapter 12 lives:** combined with the `<=` "
+         "is where defect D1 in Chapter 17 lives:** combined with the `<=` "
          "comparison in rigLStep(), it drops K+1 weights rather than K."),
         ("32-33", "free(vals); return thresh;",
          "Release the scratch buffer and return. Note the buffer is freed on "
@@ -537,7 +537,7 @@ def ch_kth_smallest():
         "weights. The GROW step has the mirror-image error, so the two happen "
         "to cancel and total sparsity is preserved - but the swap size is not "
         "the K you asked for, and with duplicate magnitudes the cancellation "
-        "stops being exact. Chapter 12, defect D1.")
+        "stops being exact. Chapter 17, defect D1.")
 
     h2("Cost on the target")
     tbl(["Quantity", "Value for the HAR 1152 x 64 layer at 90% sparsity"],
@@ -554,7 +554,7 @@ def ch_kth_smallest():
         "values only, so the true cost is `count * K`, which at 90% sparsity is "
         "an order of magnitude smaller than the n-based figure. The estimate is "
         "conservative in the safe direction, but if you are budgeting cycles, "
-        "use count, not n. Chapter 12, defect D10.")
+        "use count, not n. Chapter 17, defect D10.")
     box("warn", "malloc on a Cortex-M7",
         "29 KB from the heap, allocated and freed every 100 steps, for every "
         "sparse layer, on a device with 320 KB of SRAM and no MMU. Repeated "
@@ -622,7 +622,7 @@ def ch_kth_largest():
          "Direct float access to the gradients. In ODT, gradient tensors may be "
          "SYM_INT32 when FQT is enabled - in that case this cast is wrong and "
          "you must reconstruct the real value from the mantissa and scale "
-         "before taking magnitudes. Chapter 12, defect D3b."),
+         "before taking magnitudes. Chapter 17, defect D3b."),
         ("9", "if (!tensorBoolGet(mask, i)) count++",
          "Note the negation. Component 1 counted active weights; this counts "
          "INACTIVE ones. At 90% sparsity `count` here is about 66,355 - nine "
@@ -675,7 +675,7 @@ def ch_kth_largest():
         "bin containing the K-th largest - needs about 1 KB and no allocation "
         "at all, at the cost of a threshold that is approximate to within one "
         "bin width. For a swap decision that is re-made every 100 steps, an "
-        "approximate threshold is entirely acceptable. Chapter 12, defect D8.")
+        "approximate threshold is entirely acceptable. Chapter 17, defect D8.")
 
 
 # =============================================================================
@@ -756,7 +756,7 @@ def ch_weightmask():
       "arithmetic fields correspond to the forward, weight-gradient, "
       "bias-gradient and loss-propagation paths. The lesson for you is "
       "practical: **do not retype the struct from either listing.** Open "
-      "Linear.h, find `linearConfig_t`, and add the one field. Chapter 12, "
+      "Linear.h, find `linearConfig_t`, and add the one field. Chapter 17, "
       "defect D7.")
 
     h2("Memory cost")
@@ -892,7 +892,7 @@ def ch_matmul():
         "be evolving at random: you will have implemented static sparse "
         "training with extra steps. MASK THE FORWARD MATMUL AND THE "
         "LOSS-PROPAGATION MATMUL; LEAVE THE WEIGHT-GRADIENT MATMUL DENSE. "
-        "Chapter 12, defect D3.")
+        "Chapter 17, defect D3.")
     p("This is also where RigL's real cost sits. The forward pass gets nine "
       "tenths cheaper, but the weight-gradient pass stays dense, so the "
       "end-to-end training speedup is well under the 10x that the sparsity "
@@ -974,7 +974,7 @@ def ch_sgd():
          "runs on every optimiser step, while GROW needs the inactive "
          "gradients at the rigLStep() boundary. The two only coexist because "
          "rigLStep() runs BEFORE the optimiser in the same iteration - see "
-         "Chapter 11 and defect D4."),
+         "Chapter 13 and defect D4."),
         ("17", "continue;",
          "Skip the arithmetic entirely. Unlike the matmul, the saving here is "
          "negligible - the optimiser runs once per step, not once per MAC. "
@@ -987,7 +987,7 @@ def ch_sgd():
          "The SGD step. Momentum, if configured, is applied elsewhere in the "
          "ODT pipeline - which raises a question the source does not answer: "
          "the momentum buffer for an inactive weight is never cleared here. "
-         "Chapter 12, defect D5."),
+         "Chapter 17, defect D5."),
     ])
     box("key", "Why forcing the weight to zero matters more than it looks",
         "Suppose you skip line 15 and simply `continue` without writing. The "
@@ -1061,7 +1061,7 @@ def ch_adamw():
          "divide it away."),
         ("16", "grad[i] = 0.0f",
          "Reset the accumulator, as in SGD, with the same interaction with the "
-         "GROW step noted in Chapter 7."),
+         "GROW step noted in Chapter 9."),
     ])
     box("note", "Also clear the SGD momentum buffer",
         "Section 13.4 correctly identifies stale moments as a hazard for AdamW "
@@ -1069,7 +1069,7 @@ def ch_adamw():
         "problem in a milder form: a regrown weight inherits the velocity it "
         "had before it was dropped. If your SGD carries a momentum buffer, "
         "clear that entry too, in the branch on line 14-18 of Listing 7.1. "
-        "Chapter 12, defect D5.")
+        "Chapter 17, defect D5.")
 
     h2("Memory cost of AdamW under sparsity")
     tbl(["Tensor", "Elements", "Bytes", "Note"],
@@ -1090,7 +1090,7 @@ def ch_adamw():
         "use SGD (which needs no moment buffers and brings the layer to 599 KB "
         "- still too large), or shrink the layer, which is what the source "
         "itself recommends in section 39.10 when it suggests a Conv1d feature "
-        "extractor ahead of a much smaller linear head. Chapter 12, defect D6.")
+        "extractor ahead of a much smaller linear head. Chapter 17, defect D6.")
 
 
 # =============================================================================
@@ -1179,7 +1179,7 @@ def ch_riglstep():
          "freezes at the END of training. Section 2.3 specifies T_end = 80% of "
          "total steps, so the caller must pass `totalSteps * 0.8` here rather "
          "than the true total - an easy mistake that leaves the mask still "
-         "swapping during the final epochs. Chapter 12, defect D9."),
+         "swapping during the final epochs. Chapter 17, defect D9."),
         ("10", "if (model[l]->type != LINEAR) continue;",
          "Only linear layers are considered. Conv1d layers are skipped entirely "
          "even if section 20.4 describes a kernelMask for them - so on a "
@@ -1194,7 +1194,7 @@ def ch_riglstep():
          "needs both: weights for the DROP decision, gradients for GROW."),
         ("19-20", "float *w, *g",
          "Direct float access again, with the same FLOAT32-only limitation "
-         "noted in Chapter 3. Under FQT these tensors may be SYM_INT32."),
+         "noted in Chapter 5. Under FQT these tensors may be SYM_INT32."),
         ("22-24", "count numActive",
          "A third full pass over the mask, after the two that "
          "findAbsKthSmallestActive() will do internally. Caching this count in "
@@ -1215,7 +1215,7 @@ def ch_riglstep():
          "The DROP test. Non-strict `<=` combined with a zero-indexed K-th "
          "value drops K+1 weights, and drops MORE than that when magnitudes "
          "tie - which is common, because every weight that was grown but never "
-         "updated is still exactly 0.0. Chapter 12, defect D1."),
+         "updated is still exactly 0.0. Chapter 17, defect D1."),
         ("33-34", "tensorBoolSet(mask,i,false); w[i] = 0.0f;",
          "Deactivate and zero. Writing the zero here rather than waiting for "
          "the optimiser means the invariant holds immediately, which matters "
@@ -1229,7 +1229,7 @@ def ch_riglstep():
          "regrown in the same step, wasting part of the swap budget and "
          "resetting a trained weight to zero for no benefit. The published "
          "algorithm excludes the just-dropped set from growth candidates. "
-         "Chapter 12, defect D2."),
+         "Chapter 17, defect D2."),
         ("41", "if (!tensorBoolGet(mask,i) && fabsf(g[i]) >= growThresh)",
          "The GROW test, with the mirror of defect D1: non-strict `>=` grows "
          "K+1. Because DROP also removes K+1, the total active count is "
@@ -1353,7 +1353,7 @@ def ch_serialize():
         ("24", "mask = allocBoolTensor(n)",
          "Allocate before reading. The caller becomes the owner and must attach "
          "it to `cfg->weightMask` and eventually free it - the same ownership "
-         "question raised in Chapter 5, now with a second place to leak."),
+         "question raised in Chapter 7, now with a second place to leak."),
         ("26", "fread(mask->data, 1, bytes, fp)",
          "Read the packed bits back. Neither this call nor the fwrite above "
          "checks its return value; a truncated file yields a partly-initialised "
@@ -1382,7 +1382,7 @@ def ch_serialize():
         "belongs behind a version bump to v3, with the reader accepting both. "
         "The change is one byte per tensor, so the cost of doing it properly is "
         "trivial; the cost of not doing it is a checkpoint corpus that silently "
-        "splits in two. Chapter 12, defect D9.")
+        "splits in two. Chapter 17, defect D9.")
     tbl(["What is stored", "Bytes for the HAR 1152 x 64 layer"],
         [["Weight data", "294,912"],
          ["Presence flag", "1"],
@@ -1479,7 +1479,7 @@ def ch_integration():
         ("10-11", "forward(); backward();",
          "The gradients that rigLStep() will read are produced here. **The "
          "backward pass must produce gradients for INACTIVE weights too** - see "
-         "Chapter 6 - or the GROW step has nothing to rank."),
+         "Chapter 8 - or the GROW step has nothing to rank."),
         ("13-14", "if (step % RIGL_INTERVAL == 0) rigLStep(...)",
          "The mask update, placed AFTER backward and BEFORE the optimiser "
          "step."),
@@ -1503,7 +1503,7 @@ def ch_integration():
         "(Component 5 line 16 clears them). BEFORE the optimiser is the correct "
         "choice, for exactly the reason 39.9 gives, and because the optimiser "
         "would otherwise have wiped the inactive gradients that GROW depends "
-        "on. Chapter 12, defect D4.")
+        "on. Chapter 17, defect D4.")
 
     h2("Component 10 - the two schedules")
     p("The learning-rate schedule and the alpha schedule are separate cosines "
@@ -1532,7 +1532,7 @@ def ch_integration():
         "must pass `0.8f * totalSteps` as the `totalSteps` argument - the "
         "parameter is misnamed, and passing the true total leaves the mask "
         "swapping into the final epoch, which is precisely what the schedule "
-        "exists to prevent. Chapter 12, defect D9.")
+        "exists to prevent. Chapter 17, defect D9.")
 
 
 def ch_verification():
@@ -1703,8 +1703,8 @@ def ch_defects():
     box("warn", "This is the defect that silently turns RigL into static sparsity",
         "GROW ranks inactive weights by |gradient|. Three separate parts of "
         "this implementation can leave those gradients at zero. (a) If the "
-        "weight-gradient matmul is masked like the forward matmul (Chapter 6), "
-        "inactive weights never receive a gradient at all. (b) Component 5 "
+        "weight-gradient matmul is masked like the forward matmul (Chapter 8), "
+        "inactive weights never receive a gradient at all. (b) Component 5 (Chapter 9) "
         "line 16 sets `grad[i] = 0.0f` for inactive weights on EVERY optimiser "
         "step. (c) rigLStep() itself zeroes them at the end of every call. If "
         "any of these wins the race, `findAbsKthLargestInactive()` sees all "
@@ -1755,7 +1755,7 @@ def ch_defects():
 
     h2("D7 - Two struct definitions")
     p("Sections 11.4 and 39.4 both present `linearConfig_t` with different "
-      "field lists (Chapter 5 of this document tabulates them). Retyping either "
+      "field lists (Chapter 7 of this document tabulates them). Retyping either "
       "one will break the build. Edit the real header instead.")
 
     h2("D8 - malloc on the target")
@@ -1811,7 +1811,7 @@ def ch_defects():
         "the final epoch. Better: give rigLStep() an explicit `tEnd` parameter "
         "instead of overloading `totalSteps`.",
         "**Format version.** Adding the sparsity presence byte changes every "
-        "tensor record, including in dense checkpoints, while chapter 17 calls "
+        "tensor record, including in dense checkpoints, while chapter 17 of the SOURCE calls "
         "the format 'locked v2'. Bump to v3 and have the reader accept both.",
     ])
 
@@ -1820,7 +1820,7 @@ def ch_defects():
       "runs over the gathered ACTIVE values, so the cost is `count * K`. At 90% "
       "sparsity that is ten times smaller for the DROP side - and, importantly, "
       "nine times LARGER for the GROW side, where count is the inactive "
-      "population. The corrected figures are in Chapters 3 and 4.")
+      "population. The corrected figures are in Chapters 5 and 6.")
 
     box("key", "What to do with this list",
         "Fix D3, D8 and D4 before you run anything - they are the difference "
@@ -2002,6 +2002,690 @@ def ch_appendix_index():
       "path.")
 
 
+
+
+# =============================================================================
+def ch_worked_step():
+    chapter("One RigL Step, Computed by Hand")
+    p("Before any C code, work one complete RigL step on a layer small enough "
+      "to hold in your head. Every number below was computed and checked; you "
+      "can verify each one with a calculator in about ten minutes. If you "
+      "understand this chapter, the 51-line rigLStep() in Chapter 11 contains "
+      "no surprises.")
+
+    h2("The toy layer")
+    p("A linear layer with 2 output neurons and 4 inputs - so 8 weights - at "
+      "50% sparsity, meaning 4 are active. Weights are stored row-major: row 0 "
+      "is output neuron 0, row 1 is output neuron 1.")
+    diagram([
+        "  weight matrix, [out=2, in=4], row-major",
+        "",
+        "                in0     in1     in2     in3",
+        "  out0  [   0.80   -0.05    0.00    0.00 ]     flat indices 0 1 2 3",
+        "  out1  [   0.30    0.00   -0.12    0.00 ]     flat indices 4 5 6 7",
+        "",
+        "  mask  [      1       1       0       0",
+        "               1       0       1       0 ]",
+        "",
+        "  active = {0, 1, 4, 6}      inactive = {2, 3, 5, 7}",
+    ], "Figure 2.1 - The toy layer. Inactive weights are exactly 0.0, which is "
+       "the invariant every component in this document maintains.")
+    tbl(["Flat index", "0", "1", "2", "3", "4", "5", "6", "7"],
+        [["weight w", "0.80", "-0.05", "0.00", "0.00", "0.30", "0.00", "-0.12",
+          "0.00"],
+         ["mask m", "1", "1", "0", "0", "1", "0", "1", "0"],
+         ["gradient g", "0.02", "0.85", "0.40", "-0.03", "0.05", "0.90", "0.01",
+          "-0.70"]],
+        widths=[18, 10.25, 10.25, 10.25, 10.25, 10.25, 10.25, 10.25, 10.25],
+        bold_first=True)
+    p("The gradients are the ones the backward pass just produced. Note that "
+      "**inactive weights have gradients too** - positions 2, 3, 5 and 7 carry "
+      "0.40, -0.03, 0.90 and -0.70. That is not an accident of this example; it "
+      "is the precondition RigL cannot work without, and Chapter 17 (defect D3) "
+      "is entirely about the ways that precondition gets broken.")
+
+    h2("Step 1 - how many weights to swap")
+    eq(["numActive = 4",
+        "alpha     = 0.5      (say we are early in training)",
+        "K         = floor(alpha * numActive) = floor(0.5 * 4) = 2"])
+    p("So this step will deactivate 2 connections and activate 2 others, "
+      "leaving the layer with 4 active weights - the same number it started "
+      "with.")
+
+    h2("Step 2 - DROP the two weakest active weights")
+    p("Collect the magnitudes of the ACTIVE weights only, and sort them:")
+    tbl(["Rank (0-indexed)", "0", "1", "2", "3"],
+        [["|w|", "0.05", "0.12", "0.30", "0.80"],
+         ["at flat index", "1", "6", "4", "0"]],
+        widths=[24, 19, 19, 19, 19], bold_first=True)
+    eq(["dropThresh = vals[K] = vals[2] = 0.30",
+        "",
+        "the two weakest are index 1 (|w| = 0.05) and index 6 (|w| = 0.12)"])
+    box("warn", "Watch what the source's comparison does here",
+        "The source tests `|w| <= dropThresh`, i.e. `|w| <= 0.30`. That matches "
+        "index 1 (0.05), index 6 (0.12) **and index 4 (0.30)** - three weights, "
+        "not the two we asked for. Using a strict `<` instead matches exactly "
+        "the two intended. This is defect D1, and it is visible in a layer of "
+        "eight weights; in a layer of 73,728 it is invisible until you count.")
+    p("Taking the corrected version, DROP deactivates indices **1 and 6**:")
+    eq(["mask[1] = 0,  w[1] = 0.0      (was -0.05)",
+        "mask[6] = 0,  w[6] = 0.0      (was -0.12)",
+        "",
+        "active is now {0, 4} - only 2 weights, temporarily below target"])
+
+    h2("Step 3 - GROW the two most promising inactive weights")
+    p("Now rank the INACTIVE weights by gradient magnitude. The question each "
+      "gradient answers is: __if this connection were switched on, how fast "
+      "would the loss fall?__")
+    tbl(["Rank (0-indexed)", "0", "1", "2", "3"],
+        [["|g|", "0.90", "0.70", "0.40", "0.03"],
+         ["at flat index", "5", "7", "2", "3"]],
+        widths=[24, 19, 19, 19, 19], bold_first=True)
+    eq(["growThresh = vals[K] = vals[2] = 0.40",
+        "",
+        "the two most promising are index 5 (|g| = 0.90) and index 7 (|g| = 0.70)"])
+    p("GROW activates indices **5 and 7**, both starting at exactly zero:")
+    eq(["mask[5] = 1,  w[5] = 0.0",
+        "mask[7] = 1,  w[7] = 0.0",
+        "",
+        "active is back to {0, 4, 5, 7} - four weights, conserved"])
+    box("key", "Why a grown weight starts at zero and not at something useful",
+        "A newly activated connection has never been trained. Giving it any "
+        "non-zero value would inject an arbitrary perturbation into a network "
+        "that is otherwise converging. Starting at zero means the connection "
+        "contributes nothing on its first forward pass and is then shaped "
+        "entirely by gradients - it earns its value. The cost is that it needs "
+        "time to become useful, which is precisely why the mask must stop "
+        "changing well before training ends.")
+
+    h2("Step 4 - clear the gradients of everything still inactive")
+    p("Positions 1, 2, 3 and 6 are inactive after the swap. Their gradients are "
+      "zeroed so that this step's values cannot influence the NEXT swap - "
+      "without this, a weight that had a large gradient once would keep looking "
+      "attractive forever.")
+
+    h2("The layer before and after")
+    tbl(["Flat index", "0", "1", "2", "3", "4", "5", "6", "7"],
+        [["mask BEFORE", "1", "1", "0", "0", "1", "0", "1", "0"],
+         ["w BEFORE", "0.80", "-0.05", "0", "0", "0.30", "0", "-0.12", "0"],
+         ["mask AFTER", "1", "0", "0", "0", "1", "1", "0", "1"],
+         ["w AFTER", "0.80", "0", "0", "0", "0.30", "0", "0", "0"]],
+        widths=[18, 10.25, 10.25, 10.25, 10.25, 10.25, 10.25, 10.25, 10.25],
+        bold_first=True)
+    eq(["active before: {0, 1, 4, 6}      4 weights",
+        "active after : {0, 4, 5, 7}      4 weights      <- conserved",
+        "",
+        "two connections moved from weak positions (1, 6)",
+        "to positions the gradient says are promising (5, 7)"])
+    p("Notice what survived: index 0 with |w| = 0.80 and index 4 with 0.30 were "
+      "never in danger - large weights are exactly what DROP protects. And "
+      "notice the price: the trained values -0.05 and -0.12 are gone forever. "
+      "Every swap discards learned information in exchange for a better "
+      "position, which is why alpha decays.")
+
+    h2("The same step with the source's code, and why it differs")
+    p("Run the identical data through the source's version - non-strict "
+      "comparisons, and GROW ranking the post-DROP inactive set - and the "
+      "result changes:")
+    tbl(["Step", "Corrected version", "Source version"],
+        [["DROP candidates", "|w| < 0.30 -> indices 1, 6", "|w| <= 0.30 -> "
+          "indices 1, 6, **4**"],
+         ["Weights dropped", "2", "3 (defect D1)"],
+         ["GROW candidate set", "Weights inactive BEFORE the drop: {2, 3, 5, 7}",
+          "Weights inactive AFTER the drop: {1, 2, 3, 5, 6, 7} - including the "
+          "ones just dropped"],
+         ["Ranking by |g|", "0.90 (i5), 0.70 (i7), 0.40 (i2), 0.03 (i3)",
+          "0.90 (i5), **0.85 (i1)**, 0.70 (i7), 0.40 (i2), ..."],
+         ["Weights grown", "indices 5, 7", "indices 5, **1**, 7 (defect D2 and "
+          "D1 together)"],
+         ["Net effect on index 1", "Dropped, stays out", "Dropped, then "
+          "IMMEDIATELY regrown in the same step - its trained value -0.05 "
+          "destroyed for nothing"]],
+        widths=[18, 40, 42], bold_first=True)
+    box("intuit", "Why index 1 is the perfect illustration of defect D2",
+        "Its weight is tiny (-0.05) so DROP judges it useless, but its gradient "
+        "is large (0.85) so GROW judges it valuable. Both judgements are "
+        "reasonable - a weight can be small and still be on a steep part of the "
+        "loss surface. The published algorithm resolves the conflict by "
+        "excluding just-dropped weights from growth, so the connection is "
+        "genuinely retired for at least one interval. The source's version "
+        "resolves it by resetting a trained weight to zero and putting it back, "
+        "which is strictly worse than leaving it alone.")
+
+    h2("The life of one connection, over a whole run")
+    diagram([
+        "  step      0   mask=1, w=+0.031   born active in the random init mask",
+        "  step    500   mask=1, w=+0.008   gradients are small; it is shrinking",
+        "  step   1000   mask=1, w=+0.002   now among the weakest active weights",
+        "  step   1100   mask=0, w= 0.000   DROPPED. Its value is gone.",
+        "  step   1100+  mask=0, w= 0.000   still receives a gradient each step,",
+        "                                   because the weight-gradient matmul",
+        "                                   stays dense (see Chapter 8)",
+        "  step   3400   mask=0, |g|=0.21   the loss surface has changed; this",
+        "                                   connection now looks valuable",
+        "  step   3400   mask=1, w= 0.000   REGROWN, starting from zero",
+        "  step   3500   mask=1, w=-0.014   the optimiser has begun shaping it",
+        "  step   8000   mask=1, w=-0.190   alpha has reached 0; the mask is",
+        "                                   frozen and only this value changes",
+    ], "Figure 2.2 - One connection's trajectory. The mask decides whether it "
+       "participates; the optimiser decides its value; the gradient decides "
+       "whether it comes back.")
+    box("key", "The sentence to remember",
+        "RigL never asks 'which weights should I delete'. It asks, every 100 "
+        "steps, 'given what the gradients now say, is the current set of "
+        "connections still the best set of this size?' - and swaps the few "
+        "positions where the answer is clearly no. The sparsity level is fixed "
+        "by you; the PATTERN is learned.")
+
+
+# =============================================================================
+def ch_prerequisites():
+    chapter("Prerequisites - the ODT Data Model")
+    origin("chapters 3, 4, 6, 10 and 11 of the source")
+    p("The code in the component chapters manipulates four ODT concepts. "
+      "Fifteen minutes here makes every later listing readable; skipping it "
+      "makes the flat-index arithmetic look like magic.")
+
+    h2("tensor_t - the universal container")
+    p("Every array in ODT is a `tensor_t`: a shape, a quantization descriptor "
+      "saying how the bytes are interpreted, and a flat byte buffer. It is "
+      "always **one-dimensional in memory**; the shape only says how to read "
+      "it.")
+    tbl(["Field", "Holds", "Why RigL cares"],
+        [["shape", "Dimensions, e.g. [64, 1152]",
+          "Tells you the row length needed to convert (row, col) to a flat "
+          "index"],
+         ["quantization", "FLOAT32, SYM_INT32, BOOL, ...",
+          "Decides whether `(float*)t->data` is a legal cast. For a mask it "
+          "must be BOOL"],
+         ["data", "A flat byte buffer",
+          "The thing every loop in this document walks"]],
+        widths=[16, 34, 50], bold_first=True)
+    eq(["calcNumberOfElementsByTensor(t)  -> the number of ELEMENTS (not bytes)",
+        "",
+        "FLOAT32 tensor of 8 elements  ->  8 elements,  32 bytes",
+        "BOOL    tensor of 8 elements  ->  8 elements,   1 byte  (bit-packed)"])
+    box("warn", "Elements, not bytes - and the mask must match exactly",
+        "The mask and the weight tensor must report the SAME element count, "
+        "because every consumer indexes both with the same flat index. They "
+        "occupy wildly different amounts of memory - 4 bytes per weight against "
+        "1 bit per mask entry - and confusing the two is how you end up reading "
+        "past the end of the mask buffer.")
+
+    h2("BOOL tensors and bit packing, worked out")
+    p("A mask stores one bit per weight, eight bits to a byte. The accessor is:")
+    listing([
+        "bool tensorBoolGet(tensor_t *t, size_t i) {",
+        "    uint8_t *d = (uint8_t *)t->data;",
+        "    return (d[i >> 3] >> (i & 7)) & 1;",
+        "}",
+        "",
+        "void tensorBoolSet(tensor_t *t, size_t i, bool v) {",
+        "    uint8_t *d = (uint8_t *)t->data;",
+        "    if (v) d[i >> 3] |=  (1u << (i & 7));",
+        "    else   d[i >> 3] &= ~(1u << (i & 7));",
+        "}",
+    ], "Listing 3.1 - The two accessors every RigL loop calls.")
+    explain([
+        ("3", "d[i >> 3]",
+         "`i >> 3` is `i / 8` - which byte holds bit i. A shift rather than a "
+         "division because the compiler generates one instruction either way "
+         "for unsigned types, and the intent is clearer as a bit operation."),
+        ("3", ">> (i & 7)",
+         "`i & 7` is `i % 8` - the bit's position within its byte. Shifting it "
+         "down to position 0..."),
+        ("3", "& 1",
+         "...and masking off everything above it leaves 0 or 1."),
+        ("8", "d[..] |= (1u << (i & 7))",
+         "Set: OR in a single 1 bit at that position, leaving the other seven "
+         "bits of the byte untouched."),
+        ("9", "d[..] &= ~(1u << (i & 7))",
+         "Clear: AND with a mask that is all ones except at that position."),
+    ])
+    p("Take the toy layer from Chapter 2. Its mask is 8 bits, so exactly one "
+      "byte:")
+    diagram([
+        "  flat index      7   6   5   4   3   2   1   0",
+        "  mask BEFORE     0   1   0   1   0   0   1   1     = 0x53 = 83",
+        "  mask AFTER      1   0   1   1   0   0   0   1     = 0xB1 = 177",
+        "",
+        "  bit i sits at position (i & 7) of byte (i >> 3), so index 0 is the",
+        "  LOW bit and the byte reads right-to-left when written this way.",
+        "",
+        "  tensorBoolGet(mask, 5) on 0xB1:",
+        "     5 >> 3 = 0        -> byte 0, which is 0xB1 = 1011 0001",
+        "     5 & 7  = 5        -> shift right by 5: 0000 0101",
+        "     & 1               -> 1, so weight 5 is ACTIVE",
+    ], "Figure 3.1 - The toy layer's mask as actual bits.")
+    tbl(["Layer", "Weights", "Mask bytes", "Weight bytes (FP32)", "Overhead"],
+        [["Toy example", "8", "1", "32", "3.1%"],
+         ["HAR 1152 x 64", "73,728", "9,216", "294,912", "3.1%"],
+         ["Output 64 x 6", "384", "48", "1,536", "3.1%"]],
+        widths=[22, 16, 16, 24, 22], bold_first=True)
+    p("The overhead is always 1 bit per 32, i.e. 3.125%, whatever the layer "
+      "size - a useful constant to quote when someone asks what the mask "
+      "costs.")
+
+    h2("Flat indices - the mapping that must never be wrong")
+    p("The weight matrix is logically 2-D and physically 1-D. Row-major means "
+      "row 0 comes first, complete, then row 1:")
+    eq(["flatIdx = rowIndex * columnsPerRow + columnIndex",
+        "",
+        "toy layer: 2 outputs x 4 inputs, so columnsPerRow = 4",
+        "",
+        "  (out 0, in 0) -> 0*4 + 0 = 0        (out 1, in 0) -> 1*4 + 0 = 4",
+        "  (out 0, in 1) -> 0*4 + 1 = 1        (out 1, in 1) -> 1*4 + 1 = 5",
+        "  (out 0, in 2) -> 0*4 + 2 = 2        (out 1, in 2) -> 1*4 + 2 = 6",
+        "  (out 0, in 3) -> 0*4 + 3 = 3        (out 1, in 3) -> 1*4 + 3 = 7"])
+    p("In the mask-aware matmul of Chapter 8 this appears as `flatIdx = "
+      "rowIndex * aColumns + i`, where `rowIndex` is the output neuron being "
+      "computed and `i` walks the inputs. It is the same formula. The reason it "
+      "deserves this much attention is that a mistake here does not crash - it "
+      "skips the wrong weights, and the model trains happily to a wrong "
+      "answer.")
+    box("tip", "The five-minute check that proves your index is right",
+        "Set every inactive weight to 0.0, then run the ORDINARY dense matmul "
+        "and compare against your masked one. They must agree bit for bit, "
+        "because skipping a weight and multiplying by a stored zero are the "
+        "same arithmetic. If they disagree, your flat index does not match the "
+        "mask's ordering. This one test is worth more than any amount of "
+        "staring at the formula.")
+
+    h2("parameter_t - a weight and its gradient, together")
+    eq(["typedef struct {",
+        "    tensor_t *param;    /* the weights themselves */",
+        "    tensor_t *grad;     /* dL/dW, same shape, filled by backward() */",
+        "} parameter_t;"])
+    p("rigLStep() needs both halves: `param` for the DROP decision and `grad` "
+      "for GROW. They have identical shapes and element counts, so one flat "
+      "index addresses the weight, its gradient and its mask bit - which is "
+      "what makes the loops in Chapter 11 as simple as they are.")
+
+    h2("layer_t and the config union")
+    eq(["layer_t   { layerType_t type;  layerConfig_t *config;  ... }",
+        "layerConfig_t is a UNION: .linear, .conv1d, .relu, ...",
+        "",
+        "so: model[l]->config->linear  is valid ONLY when",
+        "    model[l]->type == LINEAR"])
+    box("warn", "Why the type check comes first in rigLStep()",
+        "`config` is a union, so reading `->linear` on a Conv1d layer does not "
+        "fail - it reinterprets whatever bytes are there as a linearConfig_t "
+        "and hands you a garbage `weightMask` pointer. The line `if "
+        "(model[l]->type != LINEAR) continue;` is not a filter for tidiness; it "
+        "is what stops the function from dereferencing nonsense.")
+
+    h2("Where RigL sits in one training iteration")
+    diagram([
+        "   getBatch()",
+        "       |",
+        "   forward()          <- masked matmul: skips inactive weights",
+        "       |",
+        "   loss",
+        "       |",
+        "   backward()         <- weight-gradient matmul: DENSE, so that",
+        "       |                 inactive weights still receive gradients",
+        "       |",
+        "   rigLStep()         <- every 100 steps: DROP + GROW using those",
+        "       |                 gradients, before anything clears them",
+        "       |",
+        "   optimizer.step()   <- masked update: active weights move,",
+        "       |                 inactive ones are forced to exactly 0",
+        "   next iteration",
+    ], "Figure 3.2 - The order of operations. Two things in this diagram are "
+       "load-bearing: backward() must be dense, and rigLStep() must run before "
+       "the optimiser. Chapter 17 explains what breaks otherwise.")
+
+
+# =============================================================================
+def ch_logs():
+    chapter("What You Will See in the Logs")
+    p("Every defect in this document has a signature in the training log. "
+      "Knowing what healthy output looks like means you can spot a broken "
+      "implementation within the first few hundred steps instead of after a "
+      "50-epoch run.")
+
+    h2("Healthy output")
+    listing([
+        "[RIGL] rigLStep: layer=0 step=0    alpha=0.3000 K=2212 active=7412",
+        "[RIGL]   drop thresh=2.481e-03 dropped=2212",
+        "[RIGL]   grow thresh=8.113e-04 grown=2212",
+        "[RIGL] rigLStep: layer=0 step=100  alpha=0.2999 K=2211 active=7412",
+        "[RIGL]   drop thresh=2.106e-03 dropped=2211",
+        "[RIGL]   grow thresh=7.984e-04 grown=2211",
+        "...",
+        "[RIGL] rigLStep: layer=0 step=4100 alpha=0.1500 K=1111 active=7412",
+        "[RIGL]   drop thresh=9.02e-04  dropped=1111",
+        "[RIGL]   grow thresh=1.219e-03 grown=1111",
+        "...",
+        "[RIGL] rigLStep: layer=0 step=8200 alpha=0.0000 K=0    active=7412",
+        "(no further output - K is zero, the mask is frozen)",
+    ], "Listing 13.1 - What a correct run looks like.")
+    tbl(["Signal", "Healthy behaviour", "Why"],
+        [["active", "Identical on every line, for the whole run",
+          "Conservation: K dropped = K grown"],
+         ["alpha", "Starts at 0.3000, decays smoothly, reaches 0 at tEnd",
+          "The cosine schedule"],
+         ["K", "Tracks alpha x active, falls to 0", "K = floor(alpha * active)"],
+         ["dropped and grown", "Equal to each other on every line",
+          "If they differ, sparsity is drifting"],
+         ["drop thresh", "Small and slowly FALLING",
+          "As training proceeds the surviving weights grow, so the K-th "
+          "smallest gets smaller"],
+         ["grow thresh", "Small and slowly RISING",
+          "Gradients on inactive weights shrink as the model converges, so the "
+          "bar for being interesting rises relative to them"]],
+        widths=[16, 34, 50], bold_first=True)
+
+    h2("Failure signatures")
+    tbl(["What you see", "Almost certainly", "Where to look"],
+        [["`grow thresh=0.000000` on every line",
+          "**Defect D3.** The inactive gradients are all zero, so the threshold "
+          "collapses and GROW is picking by scan order. RigL is not running",
+          "Is the weight-gradient matmul masked? Is rigLStep() after the "
+          "optimiser?"],
+         ["`active` falls a little on every RigL step",
+          "DROP is removing more than GROW restores - usually the same D3, with "
+          "too few gradients above the threshold",
+          "Compare dropped and grown on each line"],
+         ["`active` rises over time",
+          "GROW is over-matching, typically many gradients tied at exactly the "
+          "threshold", "The tie handling of defect D1"],
+         ["`dropped` and `grown` differ by 1 consistently",
+          "**Defect D1**, the off-by-one from non-strict comparisons",
+          "The `<=` and `>=` in rigLStep()"],
+         ["`dropped` is constant while K falls",
+          "Many active weights share an identical magnitude - usually 0.0 "
+          "because grown weights were never updated",
+          "Is the optimiser running? Is it masked correctly?"],
+         ["No `[RIGL]` lines at all",
+          "Every weightMask is NULL, so rigLStep() skips every layer",
+          "Did buildSequentialModel() get `sparse=true`?"],
+         ["`K=0` from the very first step",
+          "alpha or numActive is zero - a mask filled with the wrong "
+          "probability, or `bernoulliFillMask(mask, 0.9)` when you meant 0.1",
+          "The P(active) inversion in Chapter 13"],
+         ["Loss spikes at every RigL step and never recovers",
+          "alpha too high or the interval too short - the network cannot "
+          "re-learn 2,000 connections in 100 steps",
+          "Lower alphaInit, or raise RIGL_INTERVAL"],
+         ["Instruction counter unchanged after masking",
+          "The mask is not reaching the matmul kernel",
+          "A wrapper is still passing NULL"],
+         ["Hard fault or malloc failure a few steps in",
+          "**Defect D8** - 259 KB of scratch heap on a 320 KB device",
+          "Build the histogram variant"]],
+        widths=[26, 42, 32], bold_first=True)
+
+    h2("The three numbers to plot")
+    bul([
+        "**Active count per layer, against step.** Should be a flat line. This "
+        "single plot catches D1, D3 and most plumbing mistakes.",
+        "**Mask churn** - how many bits changed since the last RigL step - "
+        "against step. Should start near K and decay to zero with alpha. A "
+        "flat-zero churn means the mask is not moving; a churn that stays high "
+        "after tEnd means you passed totalSteps instead of 0.8 x totalSteps "
+        "(defect D9).",
+        "**Training loss, with the RigL steps marked.** You should see a small "
+        "spike at each swap that recovers within a few dozen steps, and the "
+        "spikes should shrink as alpha decays. Spikes that grow over time mean "
+        "the swaps are destroying more than they gain.",
+    ])
+    box("tip", "Add one assertion and most of this becomes unnecessary",
+        "The consolidated code in Appendix A logs an error whenever `grown != "
+        "dropped`. That one check turns the silent, slow-motion failure of "
+        "sparsity drift into a loud message on the step it first happens. If "
+        "you take nothing else from this chapter, take that assertion.")
+
+
+def ch_plan():
+    chapter("An Implementation Plan")
+    p("Ten components, ordered so that each one is testable before the next "
+      "depends on it. The estimates assume familiarity with the ODT codebase "
+      "and no surprises; they are there to show the SHAPE of the work, not to "
+      "be held to.")
+    tbl(["Order", "Task", "Chapter", "Rough effort", "Done when"],
+        [["1", "Read the prerequisites and the hand-worked step", "2, 3",
+          "1 hour", "You can predict the DROP and GROW sets of the toy layer "
+          "without running anything"],
+         ["2", "findAbsKthSmallestActive + unit test", "5", "2 hours",
+          "The toy example returns 0.30, and the K >= count guard returns "
+          "1e38"],
+         ["3", "findAbsKthLargestInactive + unit test", "6", "1 hour",
+          "Returns 0.40 on the toy example; the guard returns 0.0"],
+         ["4", "Decide exact vs histogram K-selection", "6, 17", "1 hour",
+          "You have measured the scratch allocation your largest layer would "
+          "need and compared it against free SRAM"],
+         ["5", "weightMask field + NULL default", "7", "30 minutes",
+          "The whole existing test suite still passes unchanged"],
+         ["6", "Mask-aware matmul + the zero-equivalence test", "8", "3 hours",
+          "Masked output is bit-identical to dense-with-zeros, and the "
+          "instruction counter drops to ~10%"],
+         ["7", "Mask-aware SGD (and AdamW if used)", "9, 10", "2 hours",
+          "After one step, every inactive weight is exactly 0.0f"],
+         ["8", "rigLStep() itself", "11", "4 hours",
+          "Active count is conserved across 100 simulated steps"],
+         ["9", "serializeSparsity + deserializeSparsity", "12", "2 hours",
+          "A save/load round trip reproduces all 73,728 bits"],
+         ["10", "UserAPI mask creation", "13", "1 hour",
+          "A model built with sparse=true logs the expected active count"],
+         ["11", "Training-loop integration", "13", "1 hour",
+          "The [RIGL] lines of Chapter 15 appear, with dropped == grown"],
+         ["12", "First real run + the three plots", "15", "1 day",
+          "Flat active count, decaying churn, recovering loss spikes"]],
+        widths=[7, 26, 9, 13, 45], bold_first=True)
+
+    h2("Checkpoints where you should stop and verify")
+    checklist("Do not proceed past these until they hold", [
+        "After step 6: masked matmul equals dense-with-zeros, bit for bit. If "
+        "this fails, everything downstream is built on a wrong index.",
+        "After step 7: inactive weights are exactly 0.0f after an optimiser "
+        "step - not merely small.",
+        "After step 8: 100 simulated rigLStep() calls leave the active count "
+        "unchanged, and `grown == dropped` never logs an error.",
+        "After step 11: `grow thresh` is strictly positive on every line. A "
+        "zero there means defect D3 and everything above it was wasted effort.",
+    ])
+    box("key", "The order is not arbitrary",
+        "Each step is verifiable using only the steps before it. Building "
+        "rigLStep() first - the tempting move, since it is the interesting part "
+        "- means its first test depends on four unverified components at once, "
+        "and a failure tells you nothing about where the fault is. The "
+        "K-selection functions are pure, take no ODT state, and can be tested "
+        "with eight numbers in an array; start there.")
+
+
+def ch_faq():
+    chapter("Common Confusions")
+
+    h3("Is RigL pruning?")
+    p("No, and the distinction matters. Pruning trains a dense network and then "
+      "removes weights, so you pay for dense training first. RigL is sparse "
+      "from step one and stays at a fixed sparsity for the whole run - the "
+      "memory and forward-pass compute never exceed the sparse budget. What it "
+      "learns, in addition to the weight values, is WHICH connections should "
+      "exist.")
+
+    h3("If 90% of weights are skipped, why is training not 10x faster?")
+    p("Because only the forward pass and the loss-propagation matmul are "
+      "masked. The weight-gradient matmul must stay dense, or the GROW step "
+      "has no signal to rank inactive weights by (Chapter 8, defect D3). "
+      "Roughly speaking you save on two of the three matmuls, so the "
+      "end-to-end training speedup is well short of the sparsity ratio. "
+      "**Inference**, where only the forward pass runs, does get close to the "
+      "full benefit - which is the case that matters on the device.")
+
+    h3("Does the model get smaller?")
+    p("Not as implemented here. The weight tensor keeps its full dense "
+      "allocation and simply contains zeros at inactive positions, so a "
+      "73,728-weight layer still occupies 288 KB plus a 9 KB mask. Getting the "
+      "memory back requires a compressed format such as CSR, which costs index "
+      "storage and destroys the O(1) random access the masked matmul relies "
+      "on. What RigL buys here is compute and energy, not footprint - be "
+      "precise about that when reporting results.")
+
+    h3("Why not just keep the largest weights and stop swapping?")
+    p("That is magnitude pruning with a fixed mask, and it is a reasonable "
+      "baseline - worth measuring, in fact. The problem is that the best "
+      "connectivity early in training is not the best connectivity later: a "
+      "connection that looks useless at step 500 may be exactly what the "
+      "network needs at step 5,000, and a fixed mask can never discover it. "
+      "The gradient of an inactive weight is the only signal that can tell you "
+      "this, and using it is the whole contribution of RigL.")
+
+    h3("What happens if I never call rigLStep()?")
+    p("You get static random sparsity: the Bernoulli mask from initialisation, "
+      "frozen. The model still trains and will reach a noticeably worse "
+      "accuracy than either dense or RigL. This is also, unfortunately, what "
+      "defect D3 silently degrades to - which is why the `grow thresh` line in "
+      "your log deserves attention.")
+
+    h3("Why every 100 steps and not every step?")
+    p("Two reasons. Cost: a RigL step is O(n) or worse per layer and would be a "
+      "significant fraction of the per-step budget if run every iteration. "
+      "Stability: a grown weight starts at zero and needs time to become "
+      "useful; swapping every step means nothing ever settles. The interval is "
+      "a hyperparameter - 100 is the source's choice and a sensible default, "
+      "and it interacts with alpha, since what matters is how many connections "
+      "move per unit of training time.")
+
+    h3("Can I use RigL on convolutional layers?")
+    p("In principle yes - section 20.4 of the source sketches a `kernelMask` "
+      "for `conv1dConfig_t` with the same treatment. In practice the "
+      "consolidated `rigLStep()` skips anything that is not LINEAR, so conv "
+      "support means extending both the layer loop and the conv inner loop. "
+      "For the HAR model it also matters less: a 16 x 9 x 3 kernel has 432 "
+      "weights against the linear layer's 73,728, so the linear layers are "
+      "where the compute is.")
+
+    h3("Should the last layer be sparse?")
+    p("No. The 64 x 6 classifier is 0.5% of the model's weights, so sparsifying "
+      "it saves nothing measurable, and removing connections there removes them "
+      "from individual output classes - the place where damage is most visible. "
+      "The same argument covers biases and normalisation parameters. Leaving "
+      "the first and last layers dense is standard practice in the pruning "
+      "literature and costs you almost nothing in compression.")
+
+    h3("What is the difference between sparsity and the mask?")
+    p("Sparsity is a number you choose - 0.9 - and it is fixed for the run. The "
+      "mask is the specific set of active positions realising that number, and "
+      "it changes every 100 steps. Note that `rigLStep()` takes a "
+      "`sparsityTarget` argument in the source and never uses it: the sparsity "
+      "is whatever the initial `bernoulliFillMask()` created, and rigLStep only "
+      "preserves it.")
+
+    h3("My active count is 7,412 but I asked for 7,373. Is that a bug?")
+    p("No. `bernoulliFillMask` makes an independent draw per weight, so the "
+      "realised count is binomial: for 73,728 weights at p = 0.1 the mean is "
+      "7,373 with a standard deviation of about 81. A count within a few "
+      "hundred of the target is expected. If you need exactly the target, "
+      "shuffle an array with exactly that many ones instead of drawing "
+      "independently.")
+
+    h3("Do I need FQT and quantization working before RigL?")
+    p("No, and it is easier if you do not. Everything in this document assumes "
+      "FLOAT32 weights and gradients - the direct `(float*)t->data` casts are "
+      "only valid in that case. Get RigL correct in float first; extending the "
+      "threshold comparisons to SYM_INT32 mantissas, which requires "
+      "reconstructing `mantissa * scale` before comparing magnitudes, is a "
+      "separate and clearly-scoped piece of work.")
+
+
+# =============================================================================
+def ch_appendix_glossary():
+    chapter("Appendix - Glossary")
+    p("Every term used in this document, in one place. ODT-specific terms are "
+      "marked (ODT); the rest are general to sparse training.")
+    gloss = [
+        ("active weight", "A weight whose mask bit is 1. It participates in the "
+         "forward pass and is updated by the optimiser."),
+        ("alpha, alpha(t)", "The fraction of active weights swapped at a RigL "
+         "step. Decays from alphaInit (0.3) to zero on a cosine schedule."),
+        ("alphaInit", "The starting value of alpha. 0.3 in the source, meaning "
+         "30% of connections move at the first swap."),
+        ("bernoulliFillMask", "(ODT) Fills a BOOL tensor with independent "
+         "Bernoulli draws. Its argument is P(ACTIVE), so 90% sparsity means "
+         "passing 0.1."),
+        ("bit packing", "Storing one boolean per bit rather than per byte. A "
+         "73,728-element mask occupies 9,216 bytes."),
+        ("BOOL tensor", "(ODT) A tensor whose quantization type is BOOL; the "
+         "storage format for a mask."),
+        ("conservation", "The RigL invariant that K weights dropped equals K "
+         "weights grown, so the active count never changes."),
+        ("CSR", "Compressed Sparse Row - a format that stores only non-zeros "
+         "plus indices. Saves memory, loses O(1) random access; not used here."),
+        ("dense", "The ordinary, unmasked case. In ODT a layer is dense exactly "
+         "when its weightMask is NULL."),
+        ("DROP", "The half of a RigL step that deactivates the K active weights "
+         "with the smallest |w|."),
+        ("executeOp", "(ODT) The universal funnel through which kernels are "
+         "invoked, with prologue, kernel and epilogue stages."),
+        ("flat index", "The one-dimensional position of an element in a "
+         "row-major tensor: row * columnsPerRow + column. The mask, the weight "
+         "and its gradient all share it."),
+        ("FQT", "Fully Quantized Training - the integer-arithmetic training path "
+         "in ODT, in which weights and gradients may be SYM_INT32 rather than "
+         "FLOAT32."),
+        ("GROW", "The half of a RigL step that activates the K inactive weights "
+         "with the largest |gradient|."),
+        ("HAR", "Human Activity Recognition - the target task: classifying "
+         "activities from wrist-worn IMU signals."),
+        ("inactive weight", "A weight whose mask bit is 0. Skipped in the "
+         "forward pass, forced to exactly 0.0 by the optimiser, but still "
+         "receiving a gradient - which is what makes GROW possible."),
+        ("K", "The number of weights swapped at one RigL step: "
+         "floor(alpha * numActive)."),
+        ("K-selection", "Finding the K-th smallest or largest value in a set. "
+         "Implemented here by partial selection sort or by histogram."),
+        ("kernelMask", "(ODT, proposed) The Conv1d analogue of weightMask; "
+         "described in section 20.4 of the source, not implemented."),
+        ("layerConfig_t", "(ODT) A union of per-layer-type configs. Reading "
+         ".linear on a non-LINEAR layer yields garbage, which is why "
+         "rigLStep() checks the type first."),
+        ("magnitude pruning", "Removing the smallest-magnitude weights. RigL's "
+         "DROP step, but without any regrowth."),
+        ("mask", "The BOOL tensor recording which weights are active. One bit "
+         "per weight, same element count as the weight tensor."),
+        ("mask churn", "How many mask bits changed at a RigL step. Should track "
+         "K and decay to zero."),
+        ("MCU", "Microcontroller unit - here an STM32 Nucleo-F746ZG: Cortex-M7 "
+         "at 216 MHz with 320 KB of SRAM and no MMU."),
+        ("parameter_t", "(ODT) A weight tensor paired with its gradient tensor."),
+        ("partial selection sort", "Selection sort stopped after K+1 positions. "
+         "O(count*K) rather than O(count^2)."),
+        ("PPCA replay", "(ODT) Probabilistic-PCA-based continual learning in the "
+         "library; unrelated to RigL, and its chapter confirms it needs no "
+         "changes."),
+        ("RigL", "Rigging the Lottery: sparse training in which connectivity is "
+         "learned by dropping low-magnitude weights and growing "
+         "high-gradient ones."),
+        ("rigLStep", "The function that performs one DROP/GROW update over "
+         "every sparse layer of a model."),
+        ("SR", "Stochastic rounding - rounding up or down at random with "
+         "probability proportional to distance, used in ODT's integer training "
+         "path."),
+        ("sparsity, s", "The fraction of weights that are inactive. 0.9 means "
+         "nine in ten are off."),
+        ("straight-through estimator", "Treating a non-differentiable forward "
+         "operation as the identity in the backward pass; used in quantization, "
+         "not needed by RigL."),
+        ("SYM_INT32", "(ODT) A symmetric integer tensor type storing int32 "
+         "mantissas plus a scale. Weight and gradient tensors may use it under "
+         "FQT, which invalidates the direct float* casts in this document."),
+        ("tEnd", "The step at which alpha reaches zero and the mask freezes. "
+         "Should be 0.8 x totalSteps, not totalSteps."),
+        ("tensor_t", "(ODT) The universal container: shape, quantization "
+         "descriptor and a flat byte buffer."),
+        ("tensorBoolGet / Set", "(ODT) Read or write one mask bit by flat "
+         "index."),
+        ("weightMask", "(ODT) The field added to linearConfig_t holding the "
+         "layer's mask, or NULL for a dense layer."),
+        ("zeroInactiveWeights", "(ODT) Enforces the invariant that every "
+         "inactive weight is exactly 0.0; called once at initialisation."),
+    ]
+    tbl(["Term", "Meaning"], [[a, b] for a, b in gloss],
+        widths=[24, 76], bold_first=True)
+
+
 # =============================================================================
 def main():
     G.STORY.clear()
@@ -2011,6 +2695,8 @@ def main():
 
     front()
     ch_algorithm()
+    ch_worked_step()
+    ch_prerequisites()
     ch_component_map()
     ch_kth_smallest()
     ch_kth_largest()
@@ -2022,8 +2708,12 @@ def main():
     ch_serialize()
     ch_integration()
     ch_verification()
+    ch_logs()
+    ch_plan()
     ch_defects()
+    ch_faq()
     ch_appendix_code()
+    ch_appendix_glossary()
     ch_appendix_index()
 
     doc = G.Book(OUTPUT,
