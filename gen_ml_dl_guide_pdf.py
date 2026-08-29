@@ -348,17 +348,23 @@ def diagram(lines, caption=None):
              Paragraph(mk(caption), S_CAP) if caption else Spacer(1, 7)]
     add(KeepTogether(items))
 
+def _checkbox():
+    """An empty square drawn with a border - independent of font glyphs."""
+    b = Table([[""]], colWidths=[3.1 * mm], rowHeights=[3.1 * mm])
+    b.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.8, C_MID)]))
+    return b
+
+
 def checklist(title, items):
     rows = []
     for it in items:
-        rows.append([Paragraph("&#9744;", _ps("cb", fontSize=11, leading=13,
-                                              textColor=C_MID)),
-                     Paragraph(mk(it), S_BULLET)])
-    t = Table(rows, colWidths=[8 * mm, CONTENT_W - 8 * mm])
+        rows.append([_checkbox(), Paragraph(mk(it), S_BULLET)])
+    t = Table(rows, colWidths=[7 * mm, CONTENT_W - 7 * mm])
     t.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 1.5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 1.5),
+        ("TOPPADDING", (0, 0), (0, -1), 2.6),      # align box with the text
+        ("TOPPADDING", (1, 0), (1, -1), 1.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2.0),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
     ]))
     add(Paragraph(mk(title), S_H3), t, Spacer(1, 6))
@@ -424,7 +430,7 @@ def front_matter():
                   "Reinforcement Learning &#183; MLOps", S_SUBTITLE))
     add(Spacer(1, 20 * mm))
     rows = [
-        ["Contents", "35 chapters in 5 parts, plus 3 appendices"],
+        ["Contents", "36 chapters in 5 parts, plus 3 appendices"],
         ["Level", "Absolute beginner to research practitioner"],
         ["Style", "Intuition first, then the mathematics, then working code"],
         ["Worked examples", "Every core algorithm is computed by hand on real "
@@ -475,10 +481,11 @@ def front_matter():
          ["IV - Architectures", "21-27",
           "CNNs, RNN/LSTM, attention and Transformers, LLMs, VAEs/GANs/diffusion, "
           "graph networks, and self-supervised learning."],
-         ["V - Expert Topics", "28-35",
+         ["V - Expert Topics", "28-36",
           "Quantization, pruning and sparsity, distillation, on-device and "
           "federated training, reinforcement learning, uncertainty and "
-          "robustness, MLOps, and how to do research."]],
+          "robustness, MLOps, how to do research, and a complete "
+          "thirteen-stage project walkthrough."]],
         widths=[22, 14, 64], bold_first=True)
 
     h3("Reading paths")
@@ -486,11 +493,15 @@ def front_matter():
         "**Complete beginner (about 6 months, part-time):** Chapters 1 -> 2 -> 3 -> 4 "
         "-> 5 -> 6 -> 13 -> 9 -> 11, then Part III in order. Do the exercises at "
         "the end of every chapter before moving on.",
+        "**Starting a real project today:** read Chapter 36 first - it is the "
+        "thirteen-stage procedure end to end - and follow its references back "
+        "into the chapters as each stage needs them.",
         "**Programmer who wants deep learning fast:** skim 1-3, read 4, then jump "
         "to 14-20, then pick the architecture chapter that matches your data "
         "(21 for images, 22-23 for sequences, 26 for graphs).",
         "**Practitioner shipping to devices:** Part III as refresher, then 28-31 "
-        "(quantization, pruning, distillation, on-device training) and 34 (MLOps).",
+        "(quantization, pruning, distillation, on-device training), 34 (MLOps) "
+        "and 36 (the full project walkthrough).",
         "**Interview preparation:** 3, 5, 6, 13, 15, 17, 21, 23, plus the glossary "
         "in Appendix B.",
     ])
@@ -5603,6 +5614,8 @@ def part5():
         "twenty abstracts per day. Reimplement one method per quarter - "
         "implementation is the only reading comprehension test that works.")
 
+    ch_project()
+
 
 # =============================================================================
 #                              APPENDICES
@@ -7205,6 +7218,734 @@ def ex_ch32():
         "genuinely change the world you observe next is full reinforcement "
         "learning the right tool, and even then start with PPO or SAC and a "
         "carefully shaped reward rather than an exotic algorithm.")
+
+
+
+
+def ch_project():
+    chapter("A Complete Project, Step by Step")
+    p("Every previous chapter taught a piece. This one puts them in order. It "
+      "is a single continuous procedure - thirteen stages from an unclear "
+      "business request to a monitored production model - written so that you "
+      "can follow it literally on your own data. Two full worked projects "
+      "close the chapter: a tabular classifier and a deep-learning sensor "
+      "model, each with the code that actually runs.")
+    diagram([
+        "  0. FRAME      what is predicted, what a mistake costs, what 'done' means",
+        "  1. SET UP     repository, environment, seeds, experiment log",
+        "  2. DATA       collect, document, and split BEFORE looking",
+        "  3. EXPLORE    on the training split only",
+        "  4. BASELINE   trivial, then simple - never skip this",
+        "  5. PIPELINE   leak-free preprocessing as one object",
+        "  6. MODEL      classical track first, deep track if justified",
+        "  7. TUNE       search the few hyperparameters that matter",
+        "  8. EVALUATE   slices, calibration, error analysis, confidence intervals",
+        "  9. COMPRESS   quantize / prune / distil to the deployment budget",
+        " 10. PACKAGE    freeze artefacts, write the inference path, test it",
+        " 11. DEPLOY     shadow, canary, ramp, with rollback ready",
+        " 12. MONITOR    drift, performance, cost - and retrain on a trigger",
+    ], "Figure 36.1 - The thirteen stages. Work them in order; the expensive "
+       "mistakes come from skipping forward.")
+
+    h2("Stage 0 - Frame the problem before touching data")
+    p("The most costly errors in machine learning are made before any code is "
+      "written, and they all have the same shape: building a model that works "
+      "but answers the wrong question. Write a one-page charter and get it "
+      "agreed. If you cannot fill in every row below, you are not ready to "
+      "start.")
+    tbl(["Question", "Why it decides everything downstream", "Example answer"],
+        [["What exactly is predicted, for what entity, at what moment?",
+          "Defines the unit of analysis and the exact timestamp at which "
+          "features must be available - i.e. what counts as leakage",
+          "For each transaction, at authorisation time, the probability it is "
+          "fraudulent"],
+         ["What decision does the prediction drive?",
+          "A number nobody acts on has no value; the action determines the "
+          "metric", "Send to a human analyst, or auto-decline"],
+         ["What does each kind of error cost?",
+          "Sets the metric and the decision threshold (Chapter 13)",
+          "False positive: 20 EUR of analyst time. False negative: ~500 EUR "
+          "average loss"],
+         ["What is the current baseline?",
+          "You must beat something that already exists, or the project has no "
+          "measurable value", "A hand-written rule set catching 55% of fraud "
+          "with 8% precision"],
+         ["What would make this a success?",
+          "The go/no-go number, agreed in advance, in business units",
+          "Same recall at 3x the precision, evaluated on next quarter's data"],
+         ["What are the constraints?",
+          "Latency, memory, privacy, regulation, explainability - each one "
+          "removes options", "Under 50 ms at p99; must run on-premise; the "
+          "reason for a decline must be explainable"],
+         ["Who owns it after launch?",
+          "An unowned model rots within months", "The risk team, with a monthly "
+          "review"]],
+        widths=[24, 40, 36], bold_first=True)
+    box("warn", "Three framings that sink projects",
+        "PREDICTING SOMETHING NOBODY CAN ACT ON: a churn score delivered the "
+        "day the customer leaves. THE TARGET IS A PROXY THAT DRIFTS FROM THE "
+        "GOAL: optimising click-through when the goal is satisfaction. THE "
+        "LABEL DOES NOT EXIST YET: 'predict which customers will love the new "
+        "product' when the product has never shipped. In all three cases the "
+        "modelling will succeed and the project will fail.")
+
+    h2("Stage 1 - Set up the repository and the environment")
+    p("Do this on day one, not after the first promising result. The cost is "
+      "thirty minutes; the cost of not doing it is being unable to reproduce "
+      "the result that mattered.")
+    code([
+        "project/",
+        "|-- data/",
+        "|   |-- raw/            # immutable. NEVER write here after download",
+        "|   |-- interim/        # intermediate, reproducible from raw",
+        "|   +-- processed/      # model-ready tables/tensors",
+        "|-- notebooks/          # exploration only; nothing importable lives here",
+        "|-- src/",
+        "|   |-- data.py         # loading, splitting, validation",
+        "|   |-- features.py     # the preprocessing pipeline (one object)",
+        "|   |-- train.py        # takes a config, writes a run directory",
+        "|   |-- evaluate.py     # metrics, slices, plots",
+        "|   +-- serve.py        # the inference path used in production",
+        "|-- configs/            # one YAML per experiment, version-controlled",
+        "|-- models/             # saved artefacts, one folder per run id",
+        "|-- reports/            # figures, model cards, results tables",
+        "|-- tests/              # data validation + behavioural tests",
+        "|-- requirements.txt    # pinned versions, not ranges",
+        "+-- README.md           # how to reproduce, in five commands or fewer",
+    ], "Listing 36.1 - A layout that scales from a notebook to a team.")
+    code([
+        "# src/utils.py - the reproducibility preamble every run should call",
+        "import os, random, json, subprocess, datetime",
+        "import numpy as np, torch",
+        "",
+        "def set_seed(seed: int = 42):",
+        "    random.seed(seed); np.random.seed(seed)",
+        "    torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)",
+        "    os.environ['PYTHONHASHSEED'] = str(seed)",
+        "    # bit-exactness costs speed; enable only when you need it",
+        "    # torch.use_deterministic_algorithms(True)",
+        "",
+        "def run_metadata(cfg: dict) -> dict:",
+        "    return {",
+        "        'timestamp': datetime.datetime.now().isoformat(timespec='seconds'),",
+        "        'git_commit': subprocess.check_output(",
+        "            ['git', 'rev-parse', 'HEAD']).decode().strip(),",
+        "        'git_dirty': bool(subprocess.check_output(",
+        "            ['git', 'status', '--porcelain']).decode().strip()),",
+        "        'config': cfg,",
+        "        'data_hash': cfg.get('data_hash'),",
+        "    }",
+        "",
+        "# At the end of training, write this next to the weights:",
+        "# json.dump(run_metadata(cfg), open(run_dir / 'meta.json', 'w'), indent=2)",
+    ], "Listing 36.2 - Seeds, commit hash and config saved with every run. A "
+       "checkpoint whose hyperparameters are unknown is nearly worthless.")
+    checklist("Day-one setup", [
+        "Git repository initialised, with data/ in .gitignore.",
+        "Virtual environment with pinned versions; the exact Python version "
+        "recorded.",
+        "A `make train` or `python -m src.train --config configs/baseline.yaml` "
+        "entry point that runs end to end on a 1% sample in under a minute.",
+        "An experiment log - MLflow, Weights and Biases, or a CSV that every "
+        "run appends to.",
+        "The README explains how to reproduce the current best result from a "
+        "clean checkout.",
+    ])
+
+    h2("Stage 2 - Get the data, document it, and split it first")
+    p("The split comes before exploration, not after. Every look at the test "
+      "set spends a little of its value, and the first look is the one that "
+      "biases every later decision.")
+    bul([
+        "**Choose the split axis from the deployment reality.** If the model "
+        "will see future data, split by time. If it will see new users, "
+        "patients or devices, split by that entity. Random splitting is "
+        "correct only when rows are genuinely independent - which, in practice, "
+        "is rarer than it looks.",
+        "**Freeze the test set.** Write it to disk with a hash, and do not "
+        "regenerate it when the data is refreshed - or your numbers stop being "
+        "comparable across weeks.",
+        "**Record provenance:** where each field came from, when it was "
+        "collected, its licence and consent basis, and known gaps in coverage.",
+        "**Validate the schema automatically** so that a silent upstream change "
+        "fails the pipeline instead of quietly degrading the model.",
+    ], ordered=True)
+    code([
+        "# src/data.py",
+        "import hashlib, pandas as pd",
+        "from sklearn.model_selection import StratifiedGroupKFold, train_test_split",
+        "",
+        "def load_raw(path):",
+        "    df = pd.read_parquet(path)",
+        "    h = hashlib.sha256(pd.util.hash_pandas_object(df).values).hexdigest()",
+        "    return df, h[:12]                  # goes into the run metadata",
+        "",
+        "def split_by_time(df, ts_col, val_frac=0.15, test_frac=0.15):",
+        "    df = df.sort_values(ts_col)",
+        "    n = len(df); i_te = int(n * (1 - test_frac))",
+        "    i_va = int(i_te * (1 - val_frac))",
+        "    return df.iloc[:i_va], df.iloc[i_va:i_te], df.iloc[i_te:]",
+        "",
+        "def split_by_group(df, group_col, y_col, seed=42):",
+        "    # keeps every row of one subject/user/device on one side only",
+        "    g = df[group_col].unique()",
+        "    tr_g, te_g = train_test_split(g, test_size=0.2, random_state=seed)",
+        "    tr_g, va_g = train_test_split(tr_g, test_size=0.2, random_state=seed)",
+        "    m = lambda ids: df[df[group_col].isin(ids)]",
+        "    return m(tr_g), m(va_g), m(te_g)",
+        "",
+        "def assert_no_overlap(tr, va, te, key):",
+        "    a, b, c = set(tr[key]), set(va[key]), set(te[key])",
+        "    assert not (a & b) and not (a & c) and not (b & c), 'split leak!'",
+    ], "Listing 36.3 - The three splits you will actually need, plus the "
+       "assertion that catches the mistake.")
+    box("key", "The leakage audit, one question per feature",
+        "Go through every column and ask: __at the exact moment I must make "
+        "this prediction, would this value be known, and would it have this "
+        "value?__ A column such as `total_amount_paid` fails for a default-"
+        "prediction model because it is filled in afterwards. `account_status` "
+        "fails if it is overwritten to 'closed' when fraud is confirmed. This "
+        "audit takes an hour and routinely saves a project.")
+
+    h2("Stage 3 - Explore, on the training split only")
+    checklist("The exploration pass that pays for itself", [
+        "Shape, dtypes, memory. Does the row count match what you were told?",
+        "Target distribution. What is the positive rate, or the shape of y?",
+        "Missing-value rate per column; is missingness correlated with the "
+        "target?",
+        "Cardinality of every categorical; are there near-duplicate levels "
+        "('watch_v2' vs 'Watch V2')?",
+        "Numeric ranges and impossible values; physical or business "
+        "plausibility.",
+        "Duplicates, exact and near.",
+        "Time coverage: gaps, seasonality, a regime change halfway through.",
+        "Correlations with the target - and be suspicious of anything above "
+        "0.95, which usually means leakage rather than luck.",
+        "Look at 50 raw samples with your own eyes. Every single time.",
+    ])
+    box("warn", "The suspiciously good feature",
+        "A single feature with an AUC of 0.99 on its own is almost never a "
+        "discovery; it is almost always leakage, a duplicate of the label under "
+        "another name, or an artefact of how the dataset was assembled. Treat "
+        "it as a bug report and go find the cause before celebrating.")
+
+    h2("Stage 4 - Establish baselines before modelling")
+    p("You need two numbers before any real model: what you get for free, and "
+      "what you get for very little. Without them you cannot tell whether a "
+      "later result is good.")
+    tbl(["Baseline", "Classification", "Regression", "Why it matters"],
+        [["Trivial", "Always predict the majority class",
+          "Always predict the mean or median",
+          "Any metric must beat this or the model has learned nothing"],
+         ["Naive domain rule", "The existing hand-written rules",
+          "Last value carried forward",
+          "This is what you are actually replacing"],
+         ["Simple model", "Logistic regression on the raw columns",
+          "Ridge regression", "Fast, interpretable, and surprisingly hard to "
+          "beat; it also smoke-tests the whole pipeline"],
+         ["Strong classical", "Gradient boosting with defaults",
+          "Gradient boosting with defaults", "On tabular data this is often the "
+          "final model; anything fancier must beat it"]],
+        widths=[16, 26, 24, 34], bold_first=True)
+    code([
+        "from sklearn.dummy import DummyClassifier",
+        "from sklearn.linear_model import LogisticRegression",
+        "from sklearn.ensemble import HistGradientBoostingClassifier",
+        "from sklearn.metrics import average_precision_score",
+        "",
+        "for name, model in [",
+        "    ('trivial',  DummyClassifier(strategy='prior')),",
+        "    ('logistic', make_pipeline(pre, LogisticRegression(max_iter=2000))),",
+        "    ('gbdt',     make_pipeline(pre, HistGradientBoostingClassifier())),",
+        "]:",
+        "    model.fit(X_tr, y_tr)",
+        "    ap = average_precision_score(y_va, model.predict_proba(X_va)[:, 1])",
+        "    print(f'{name:9s} val AP = {ap:.4f}')",
+        "",
+        "# Typical output on an imbalanced problem:",
+        "#   trivial   val AP = 0.0310      <- this is the floor (the positive rate)",
+        "#   logistic  val AP = 0.2840",
+        "#   gbdt      val AP = 0.4120      <- the number to beat from now on",
+    ], "Listing 36.4 - Three baselines in fifteen lines. Run this on day two.")
+
+    h2("Stage 5 - Build the preprocessing pipeline as one object")
+    p("Everything data-dependent - imputation, scaling, encoding, feature "
+      "selection, resampling - must live inside a single fitted object that is "
+      "refitted on each training fold and saved with the model. This is not "
+      "style; it is the structural defence against the leakage of Chapter 3 "
+      "and against training/serving skew in Chapter 34.")
+    code([
+        "# src/features.py",
+        "from sklearn.pipeline import Pipeline",
+        "from sklearn.compose import ColumnTransformer",
+        "from sklearn.impute import SimpleImputer",
+        "from sklearn.preprocessing import StandardScaler, OneHotEncoder",
+        "",
+        "NUM = ['amount', 'age_days', 'n_prior_tx', 'hour_sin', 'hour_cos']",
+        "CAT = ['country', 'device', 'merchant_category']",
+        "",
+        "def build_preprocessor():",
+        "    num = Pipeline([",
+        "        ('imp', SimpleImputer(strategy='median', add_indicator=True)),",
+        "        ('sc',  StandardScaler()),",
+        "    ])",
+        "    cat = Pipeline([",
+        "        ('imp', SimpleImputer(strategy='constant', fill_value='__NA__')),",
+        "        ('oh',  OneHotEncoder(handle_unknown='ignore', min_frequency=20)),",
+        "    ])",
+        "    return ColumnTransformer([('num', num, NUM), ('cat', cat, CAT)],",
+        "                             remainder='drop')   # be explicit, always",
+        "",
+        "def add_derived(df):",
+        "    # derived features computed from ONE row's own past only",
+        "    df = df.copy()",
+        "    df['hour_sin'] = np.sin(2*np.pi*df['ts'].dt.hour/24)",
+        "    df['hour_cos'] = np.cos(2*np.pi*df['ts'].dt.hour/24)",
+        "    df['amount_per_prior'] = df['amount'] / (df['n_prior_tx'] + 1)",
+        "    return df",
+    ], "Listing 36.5 - One preprocessor object, used identically in training, "
+       "cross-validation and serving.")
+    box("tip", "`remainder='drop'` is a safety feature",
+        "Listing every column you intend to use, and dropping the rest, means "
+        "that a new column appearing upstream cannot silently enter the model - "
+        "and that an ID column cannot accidentally become a feature. The "
+        "default of silently passing everything through is how identifiers end "
+        "up as predictors.")
+
+    h2("Stage 6 - Model iteration: two tracks")
+    p("Choose the track from the data, not from ambition. On tabular data with "
+      "fewer than a million rows, the classical track usually wins and always "
+      "wins on effort per point of accuracy. On perceptual data - images, "
+      "audio, text, raw waveforms - the deep track wins decisively, and you "
+      "should start from pretrained weights.")
+    tbl(["Signal", "Take the classical track", "Take the deep track"],
+        [["Data type", "Tabular, mixed numeric/categorical",
+          "Images, audio, text, raw sensor streams"],
+         ["Rows", "10^3 - 10^6", "10^4+ from scratch, or 10^2+ with a "
+          "pretrained backbone"],
+         ["Feature semantics", "Meaningful named columns",
+          "Raw signal where useful features are unknown"],
+         ["Constraints", "Explainability, tiny training budget, CPU-only",
+          "GPU available, latency budget allows a network"],
+         ["First model", "HistGradientBoosting / LightGBM defaults",
+          "A pretrained backbone plus a new head"]],
+        widths=[16, 42, 42], bold_first=True)
+    h3("The iteration loop, one change at a time")
+    bul([
+        "Form a hypothesis: 'adding 7-day rolling aggregates will help because "
+        "fraud is bursty'.",
+        "Change exactly one thing. Two changes in one run teach you nothing "
+        "about either.",
+        "Evaluate on the validation split (or by cross-validation), with the "
+        "same seed policy as your baseline.",
+        "Record the result in the experiment log, including failures - the log "
+        "of what did not work is what stops you retrying it in six weeks.",
+        "Keep the change only if it beats the current best by more than the "
+        "seed-to-seed noise you measured in stage 4.",
+    ], ordered=True)
+    box("key", "The order that finds accuracy fastest",
+        "1. Fix data problems - label noise, leakage, wrong splits. Nothing "
+        "else matters until these are clean. 2. Add features (classical) or "
+        "improve augmentation and the backbone (deep). 3. Tune the "
+        "hyperparameters that actually move the metric. 4. Ensemble. Most "
+        "people run this list backwards and spend a week on step 4 for a "
+        "quarter of the gain step 1 would have given them.")
+
+    h2("Stage 7 - Tune only what matters")
+    tbl(["Model", "Tune first", "Tune next", "Leave alone"],
+        [["Gradient boosting", "learning_rate + n_estimators (with early "
+          "stopping)", "num_leaves / max_depth, min_samples_leaf",
+          "Everything else, usually"],
+         ["Random forest", "max_features", "min_samples_leaf, n_estimators",
+          "Criterion"],
+         ["Linear / logistic", "C or alpha (log scale)", "Penalty type",
+          "Solver, unless it fails to converge"],
+         ["Neural network", "learning rate + schedule", "Batch size, weight "
+          "decay, augmentation strength, width/depth", "Optimiser betas, "
+          "epsilon, activation function"]],
+        widths=[18, 30, 32, 20], bold_first=True)
+    p("Use random or Bayesian search over log-uniform ranges (Chapter 7), give "
+      "the search a fixed budget decided in advance, and always include the "
+      "default configuration as one of the trials - it wins more often than "
+      "people expect, and if it does, you have learned that tuning is not your "
+      "bottleneck.")
+
+    h2("Stage 8 - Evaluate like a sceptic")
+    checklist("Before you claim a result", [
+        "Metric matches the decision and its costs, chosen in stage 0 - not "
+        "accuracy by default.",
+        "Compared against the trivial and the existing baseline, on the same "
+        "split.",
+        "Averaged over 3-5 seeds, with the spread reported.",
+        "Bootstrap confidence interval on the test metric.",
+        "Per-slice metrics: by class, by subgroup, by data source, by time "
+        "period, by difficulty.",
+        "Calibration checked, and fixed with temperature or isotonic scaling if "
+        "the probability is used downstream.",
+        "Decision threshold chosen on validation using the cost matrix, not "
+        "left at 0.5.",
+        "Error analysis: read 50 of the worst errors and categorise them. This "
+        "is where the next feature idea comes from.",
+        "Test set touched exactly once, at the very end.",
+    ])
+    code([
+        "# src/evaluate.py - the error-analysis step people skip",
+        "import numpy as np, pandas as pd",
+        "",
+        "proba = model.predict_proba(X_va)[:, 1]",
+        "err = pd.DataFrame({'y': y_va, 'p': proba}).assign(",
+        "    loss=lambda d: -(d.y*np.log(d.p+1e-9) + (1-d.y)*np.log(1-d.p+1e-9)))",
+        "worst = err.sort_values('loss', ascending=False).head(50).index",
+        "",
+        "review = X_va.loc[worst].copy()",
+        "review['true'] = y_va.loc[worst]; review['pred'] = proba[worst]",
+        "review.to_csv('reports/worst_50.csv')",
+        "# Now READ it. Group the failures into 3-5 named categories and count",
+        "# them. Each category is either a data fix, a feature idea, or a",
+        "# genuine limit of the problem - and you cannot tell which from a",
+        "# metric alone.",
+    ], "Listing 36.6 - Error analysis. Half an hour here beats a day of tuning.")
+
+    h2("Stage 9 - Compress to the deployment budget")
+    p("If the model runs in the cloud with generous latency, skip this stage. "
+      "If it runs on a phone, a vehicle, a wearable or a microcontroller, this "
+      "is where Chapters 28-31 are applied, in this order:")
+    tbl(["Step", "Action", "Typical result", "Check afterwards"],
+        [["1", "Measure the dense baseline ON THE TARGET DEVICE",
+          "The only latency number that means anything", "p50 and p99, not the "
+          "mean"],
+         ["2", "Distil into a smaller architecture if the gap allows",
+          "2-10x smaller at a small accuracy cost", "Accuracy against the "
+          "teacher"],
+         ["3", "Structured pruning of channels, heads or blocks",
+          "30-50% fewer parameters, real speedup", "Rebuild the model with "
+          "smaller layers, then re-measure"],
+         ["4", "INT8 post-training quantization with a calibration set",
+          "4x smaller, 2-4x faster", "Evaluate with the target RUNTIME, not the "
+          "simulator"],
+         ["5", "Quantization-aware fine-tuning if PTQ lost too much",
+          "Recovers most of the gap", "Per-class accuracy, not just the average"],
+         ["6", "Re-measure everything on the device",
+          "The number you report", "Memory, energy, and thermal behaviour under "
+          "sustained load"]],
+        widths=[7, 33, 30, 30], bold_first=True)
+    box("warn", "Compression damage is not uniform",
+        "Quantization and pruning almost always hurt rare classes and unusual "
+        "inputs more than the average. A model that loses 0.4 points overall "
+        "can easily lose 6 points on the smallest class. Always compare the "
+        "per-slice table before and after, and treat a large per-slice drop as "
+        "a blocker even when the headline number looks fine.")
+
+    h2("Stage 10 - Package the artefact")
+    p("What ships is not the notebook. It is a directory containing everything "
+      "needed to reproduce a prediction, and an inference function that is "
+      "tested.")
+    code([
+        "models/2024-11-03_gbdt_v7/",
+        "|-- model.joblib          # the FULL pipeline: preprocessing + estimator",
+        "|-- meta.json             # git commit, config, data hash, seeds",
+        "|-- metrics.json          # test metrics, per slice, with CIs",
+        "|-- threshold.json        # the operating point and how it was chosen",
+        "|-- feature_schema.json   # names, dtypes, allowed ranges",
+        "+-- model_card.md         # intended use, data, limits, ethics",
+    ], "Listing 36.7 - A deployable run directory.")
+    code([
+        "# src/serve.py - the one code path production uses",
+        "import joblib, json, numpy as np, pandas as pd",
+        "",
+        "class Predictor:",
+        "    def __init__(self, run_dir):",
+        "        self.pipe = joblib.load(f'{run_dir}/model.joblib')",
+        "        self.schema = json.load(open(f'{run_dir}/feature_schema.json'))",
+        "        self.thr = json.load(open(f'{run_dir}/threshold.json'))['value']",
+        "",
+        "    def _validate(self, df):",
+        "        missing = set(self.schema['columns']) - set(df.columns)",
+        "        if missing:",
+        "            raise ValueError(f'missing columns: {sorted(missing)}')",
+        "        for c, (lo, hi) in self.schema.get('ranges', {}).items():",
+        "            bad = df[c].dropna().between(lo, hi).eq(False).sum()",
+        "            if bad:",
+        "                raise ValueError(f'{bad} out-of-range values in {c}')",
+        "",
+        "    def predict(self, records: list[dict]) -> list[dict]:",
+        "        df = add_derived(pd.DataFrame(records))",
+        "        self._validate(df)",
+        "        p = self.pipe.predict_proba(df)[:, 1]",
+        "        return [{'score': float(s), 'decision': bool(s >= self.thr)}",
+        "                for s in p]",
+    ], "Listing 36.8 - Inference with input validation. The validation is not "
+       "optional: silent schema drift is the most common production failure.")
+    code([
+        "# tests/test_serve.py",
+        "def test_known_case():",
+        "    out = predictor.predict([GOLDEN_RECORD])[0]",
+        "    assert abs(out['score'] - 0.8123) < 1e-4      # regression guard",
+        "",
+        "def test_invariance():",
+        "    a = predictor.predict([REC])[0]['score']",
+        "    b = predictor.predict([{**REC, 'customer_name': 'different'}])[0]['score']",
+        "    assert a == b            # an irrelevant field must not move the score",
+        "",
+        "def test_direction():",
+        "    low  = predictor.predict([{**REC, 'amount': 10}])[0]['score']",
+        "    high = predictor.predict([{**REC, 'amount': 10_000}])[0]['score']",
+        "    assert high > low        # domain knowledge, encoded as a test",
+        "",
+        "def test_rejects_bad_input():",
+        "    with pytest.raises(ValueError):",
+        "        predictor.predict([{**REC, 'amount': -5}])",
+    ], "Listing 36.9 - Behavioural tests. These catch the failures that unit "
+       "tests on training code never will.")
+
+    h2("Stage 11 - Deploy carefully")
+    bul([
+        "**Shadow:** run the new model on live traffic, log its output, act on "
+        "nothing. Compare its score distribution against the offline "
+        "distribution - a mismatch here means training/serving skew, and it is "
+        "common.",
+        "**Canary:** route 1-5% of traffic to it, watch the operational and "
+        "business metrics for a defined period.",
+        "**Ramp:** 25%, 50%, 100%, with a documented rollback trigger at each "
+        "step.",
+        "**Keep the previous model warm** and rehearse the rollback before you "
+        "need it.",
+        "**A/B test against the business metric**, not the offline metric - "
+        "they disagree more often than they agree.",
+    ])
+
+    h2("Stage 12 - Monitor, and plan for decay")
+    p("A deployed model is a photograph of the past. Assume it will degrade "
+      "and instrument for it from the first day.")
+    tbl(["Signal", "How to measure", "Alert when"],
+        [["Input drift", "PSI or KS per feature against a training reference",
+          "PSI > 0.2 on an important feature"],
+         ["Prediction drift", "Score distribution over time",
+          "Mean score moves beyond its historical band"],
+         ["Performance", "Metrics on delayed labels",
+          "Below the agreed floor for two consecutive periods"],
+         ["Data health", "Null rates, schema, cardinality",
+          "Any schema violation - fail loudly, never silently impute"],
+         ["Operational", "Latency p99, error rate, cost per 1k predictions",
+          "Breaches the SLA"],
+         ["Business", "The metric from stage 0", "Any sustained decline"]],
+        widths=[18, 44, 38], bold_first=True)
+    p("Decide the retraining policy in advance: scheduled (simplest and usually "
+      "adequate), or triggered by drift. Whichever you choose, a retrained "
+      "model is promoted only after beating the incumbent on a frozen "
+      "comparison set - automatic training is fine, automatic promotion is not.")
+
+    h2("Worked project A - a tabular classifier, end to end")
+    p("Fraud detection on transactions: 500,000 rows, 3% positive, 40 columns, "
+      "a 50 ms latency budget, and a requirement that any decline be "
+      "explainable. Here is the whole project as one script, with the "
+      "decisions annotated.")
+    code([
+        "# 0. FRAME  -> metric: average precision; threshold from the cost matrix",
+        "#             (FP = 20 EUR analyst time, FN = 500 EUR loss)",
+        "# 2. SPLIT  -> by TIME: fraud patterns evolve, so future data is the",
+        "#             honest test. Never random-split transactional data.",
+        "df, data_hash = load_raw('data/raw/tx.parquet')",
+        "df = add_derived(df)",
+        "tr, va, te = split_by_time(df, 'ts')",
+        "X_tr, y_tr = tr.drop(columns=['is_fraud']), tr['is_fraud']",
+        "X_va, y_va = va.drop(columns=['is_fraud']), va['is_fraud']",
+        "",
+        "# 4. BASELINES",
+        "#    trivial AP = 0.031   logistic AP = 0.284   gbdt AP = 0.412",
+        "",
+        "# 5-6. PIPELINE + MODEL",
+        "import lightgbm as lgb",
+        "pre = build_preprocessor()",
+        "Xt, Xv = pre.fit_transform(X_tr), pre.transform(X_va)",
+        "",
+        "model = lgb.LGBMClassifier(",
+        "    objective='binary', n_estimators=5000, learning_rate=0.03,",
+        "    num_leaves=63, min_child_samples=50, subsample=0.8,",
+        "    colsample_bytree=0.8, reg_lambda=1.0,",
+        "    scale_pos_weight=1.0)          # prefer threshold tuning to reweighting",
+        "model.fit(Xt, y_tr, eval_set=[(Xv, y_va)], eval_metric='average_precision',",
+        "          callbacks=[lgb.early_stopping(200), lgb.log_evaluation(0)])",
+        "",
+        "# 8. THRESHOLD from costs, chosen on VALIDATION",
+        "import numpy as np",
+        "p_va = model.predict_proba(Xv)[:, 1]",
+        "ths = np.linspace(0.01, 0.99, 99)",
+        "cost = [(20 * ((p_va >= t) & (y_va == 0)).sum() +",
+        "         500 * ((p_va <  t) & (y_va == 1)).sum()) for t in ths]",
+        "t_star = ths[int(np.argmin(cost))]",
+        "print('threshold', round(t_star, 3), 'expected cost', min(cost))",
+        "",
+        "# 8. SLICES - the table that decides whether this ships",
+        "for col in ['country', 'device', 'merchant_category']:",
+        "    for lvl, idx in X_va.groupby(col).groups.items():",
+        "        if len(idx) < 200: continue",
+        "        ap = average_precision_score(y_va.loc[idx], p_va[X_va.index.get_indexer(idx)])",
+        "        print(f'{col}={lvl:20s} n={len(idx):6d} AP={ap:.3f}')",
+        "",
+        "# 8. EXPLAINABILITY - required by stage 0, so it is part of the model",
+        "import shap",
+        "explainer = shap.TreeExplainer(model)",
+        "def reason_codes(x_row, k=3):",
+        "    sv = explainer.shap_values(x_row)",
+        "    order = np.argsort(-np.abs(sv))[:k]",
+        "    return [(feature_names[i], float(sv[i])) for i in order]",
+    ], "Listing 36.10 - Project A. Note what is NOT here: no neural network, no "
+       "exotic sampling, no stacking. On tabular data those come last, if at "
+       "all.")
+    p("The experiment log for this project is reproduced below. The numbers "
+      "are from one representative run; what matters is the SHAPE of the "
+      "table - which changes paid, which did not, and which decision each "
+      "result triggered.")
+    tbl(["Stage", "Result", "Decision taken"],
+        [["Baselines", "trivial 0.031, logistic 0.284, GBDT 0.412",
+          "GBDT is the track; logistic stays as the sanity check"],
+         ["+ rolling 7-day aggregates per card", "0.468",
+          "Kept - largest single gain, and it matches the domain story"],
+         ["+ 60 tuning trials (Optuna)", "0.487", "Kept, but note it is worth "
+          "less than one good feature"],
+         ["+ 5-seed ensemble", "0.494", "Rejected - 0.007 AP is not worth 5x the "
+          "serving cost at a 50 ms budget"],
+         ["Threshold from costs", "t* = 0.19", "Expected cost falls 41% versus "
+          "the 0.5 default, with no model change"],
+         ["Slice check", "AP 0.31 on one country with 4% of traffic",
+          "Blocker - investigated, traced to a missing merchant category "
+          "mapping, fixed in the pipeline"],
+         ["Final on frozen test", "AP 0.481 (95% CI 0.462-0.499)",
+          "Ships. Beats the rule set at 3.1x the precision at equal recall"]],
+        widths=[26, 30, 44], bold_first=True)
+
+    h2("Worked project B - a deep model for sensor data, on-device")
+    p("Human activity recognition from a wrist accelerometer: 30 subjects, "
+      "50 Hz, 6 activities, and the model must run on the watch itself in under "
+      "20 ms with less than 256 KB of RAM. This is the project this repository "
+      "is about, and every constraint changes a decision.")
+    code([
+        "# 2. SPLIT BY SUBJECT. A random split here would let the model",
+        "#    recognise the person instead of the activity and would report",
+        "#    ~99% accuracy that collapses on a new wearer.",
+        "tr, va, te = split_by_group(df, group_col='subject_id', y_col='activity')",
+        "assert_no_overlap(tr, va, te, 'subject_id')",
+        "",
+        "# 3-5. WINDOWING - 2 s windows, 50% overlap, computed WITHIN each split",
+        "Xtr, ytr = make_windows(tr, fs=50, sec=2.0, overlap=0.5)   # (N, 100, 3)",
+        "Xva, yva = make_windows(va, fs=50, sec=2.0, overlap=0.0)   # no overlap",
+        "",
+        "# 4. BASELINE FIRST - classical features + GBDT, 30 seconds to train",
+        "#    accuracy 0.883.  A deep model must beat this to justify itself.",
+        "",
+        "# 6. DEEP TRACK - a small 1D CNN sized for the device from the start",
+        "import torch.nn as nn",
+        "def block(cin, cout, k=5, s=2):",
+        "    return nn.Sequential(",
+        "        nn.Conv1d(cin, cin, k, s, k//2, groups=cin, bias=False),  # depthwise",
+        "        nn.Conv1d(cin, cout, 1, bias=False),                      # pointwise",
+        "        nn.BatchNorm1d(cout), nn.ReLU())",
+        "",
+        "model = nn.Sequential(",
+        "    nn.Conv1d(3, 32, 7, 2, 3, bias=False), nn.BatchNorm1d(32), nn.ReLU(),",
+        "    block(32, 64), block(64, 64), block(64, 128),",
+        "    nn.AdaptiveAvgPool1d(1), nn.Flatten(),",
+        "    nn.Dropout(0.3), nn.Linear(128, 6))",
+        "# 17,158 parameters -> 67 KB in fp32, 17 KB in INT8. Weights fit the",
+        "# budget with room left for activations, which for a (100, 3) input and",
+        "# these widths peak at about 25 KB - the number that actually binds.",
+        "",
+        "# 6. AUGMENTATION that encodes true invariances for this sensor",
+        "#    jitter, scaling, time warping, small rotations of the sensor frame.",
+        "#    NOT horizontal flip - reversing time is not an invariance here.",
+        "",
+        "# 9. COMPRESS to the device budget. Sizes below are computed from the",
+        "#    parameter counts; the latency and accuracy columns are the shape",
+        "#    of a representative run - measure your own on the real device.",
+        "#                              weights   latency   accuracy",
+        "#    fp32 dense                  67 KB     31 ms     0.921",
+        "#    + 30% channel prune + FT    38 KB     22 ms     0.916",
+        "#    + INT8 QAT                  10 KB      9 ms     0.913",
+        "#    + distil from the teacher   10 KB      9 ms     0.919  <- ships",
+    ], "Listing 36.11 - Project B. The architecture was chosen against the "
+       "memory budget before training started, not shrunk afterwards.")
+    box("key", "What differed between the two projects",
+        "Project A split by time, project B by subject - both because of how "
+        "the model will be used, not because of a convention. A used no deep "
+        "learning at all; B used a small one and still had to beat a classical "
+        "baseline to justify it. A's hard constraint was explainability, which "
+        "kept it on trees; B's was 256 KB of RAM, which decided the "
+        "architecture before the first epoch. The thirteen stages were "
+        "identical; every decision inside them came from stage 0.")
+
+    h2("Time budget and the failure timeline")
+    tbl(["Week", "What a healthy project is doing", "What a failing one is doing"],
+        [["1", "Charter agreed; repository set up; data loaded and split; "
+          "baselines running", "Reading papers; choosing a framework; building "
+          "a model with no baseline"],
+         ["2", "Leakage audit; exploration; first real model beating the "
+          "baseline", "Tuning a model whose split is wrong"],
+         ["3-4", "Feature or augmentation iteration; error analysis driving the "
+          "next change", "Trying a fifth architecture; the metric has not moved "
+          "since week 2"],
+         ["5", "Slice evaluation; calibration; threshold from costs; test set "
+          "touched once", "Discovering the test set has been used for selection "
+          "all along"],
+         ["6", "Packaging, behavioural tests, shadow deployment",
+          "Realising the features cannot be computed at serving time"],
+         ["7+", "Canary, ramp, monitoring, first retraining rehearsal",
+          "A model that scores well and has never seen a real request"]],
+        widths=[8, 46, 46], bold_first=True)
+
+    h2("The one-page master checklist")
+    checklist("Framing and data", [
+        "The prediction target, the entity and the decision moment are written "
+        "down.",
+        "The cost of each error type is quantified.",
+        "The baseline being replaced is measured.",
+        "The success criterion was agreed before modelling started.",
+        "The split axis matches deployment (time / group / random).",
+        "The test set is frozen and hashed.",
+        "Every feature passed the 'available at prediction time' audit.",
+    ])
+    checklist("Modelling and evaluation", [
+        "Trivial and simple baselines exist and are beaten.",
+        "All preprocessing lives inside the pipeline object.",
+        "One change per experiment; every run logged with its config and commit.",
+        "Results averaged over seeds, with the spread reported.",
+        "Per-slice metrics computed; no slice regressed unacceptably.",
+        "Calibration checked; the threshold was chosen from costs on validation.",
+        "50 worst errors were read and categorised.",
+        "The test set was used exactly once.",
+    ])
+    checklist("Shipping and keeping it alive", [
+        "Latency, memory and energy measured on the target device with the "
+        "target runtime.",
+        "The artefact directory contains model, metadata, metrics, threshold, "
+        "schema and model card.",
+        "Input validation and behavioural tests exist and run in CI.",
+        "Shadow and canary stages completed; rollback rehearsed.",
+        "Drift, performance and cost monitoring are live with owned alerts.",
+        "The retraining policy and the promotion gate are written down.",
+        "An owner is named.",
+    ])
+    box("tip", "If you remember only one thing from this chapter",
+        "Stage 0 and stage 4 - a written charter and an honest baseline - cost "
+        "one day between them and determine whether the other twelve stages "
+        "produce anything of value. Teams that skip them build models that are "
+        "technically excellent answers to questions nobody asked, measured "
+        "against nothing.")
+
+    h3("Exercises")
+    bul([
+        "Take a dataset you already have and write its stage-0 charter. If you "
+        "cannot fill in the cost of a false positive, go and find out - that "
+        "conversation is the exercise.",
+        "Reproduce the thirteen stages on a public dataset, timing each one. "
+        "Most people are surprised by how much of the total lands in stages "
+        "2-3.",
+        "Take a model you trained earlier in this book, package it as in stage "
+        "10, and write four behavioural tests for it.",
+        "Deliberately choose the wrong split axis for a grouped dataset, then "
+        "the right one, and report both numbers. Keep the pair - it is the most "
+        "convincing argument you will ever have for careful splitting.",
+    ], ordered=True)
 
 
 # =============================================================================
