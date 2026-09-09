@@ -438,10 +438,13 @@ def front_matter():
     add(Paragraph("Foundations &#183; Classical ML &#183; Deep Learning &#183; "
                   "Transformers &#183; Generative Models &#183; "
                   "Quantization &amp; Pruning &#183; On-Device Training &#183; "
-                  "Reinforcement Learning &#183; MLOps", S_SUBTITLE))
+                  "Reinforcement Learning &#183; Time Series &#183; "
+                  "Recommenders &#183; Vision &#183; NLP &#183; Speech &#183; "
+                  "Distributed Systems &#183; Causal Inference &#183; "
+                  "MLOps", S_SUBTITLE))
     add(Spacer(1, 20 * mm))
     rows = [
-        ["Contents", "36 chapters in 5 parts, plus 3 appendices"],
+        ["Contents", "46 chapters in 6 parts, plus 3 appendices"],
         ["Level", "Absolute beginner to research practitioner"],
         ["Style", "Intuition first, then the mathematics, then working code"],
         ["Worked examples", "Every core algorithm is computed by hand on real "
@@ -477,7 +480,7 @@ def front_matter():
       "matrices, derivatives, probability - is built up in Chapter 2 and used "
       "consistently afterwards.")
 
-    h3("The five parts")
+    h3("The six parts")
     tbl(["Part", "Chapters", "What you get out of it"],
         [["I - Foundations", "1-4",
           "Vocabulary, the mathematics you actually need, what 'learning' means "
@@ -492,11 +495,16 @@ def front_matter():
          ["IV - Architectures", "21-27",
           "CNNs, RNN/LSTM, attention and Transformers, LLMs, VAEs/GANs/diffusion, "
           "graph networks, and self-supervised learning."],
-         ["V - Expert Topics", "28-36",
+         ["V - Expert Topics", "28-35",
           "Quantization, pruning and sparsity, distillation, on-device and "
           "federated training, reinforcement learning, uncertainty and "
-          "robustness, MLOps, how to do research, and a complete "
-          "thirteen-stage project walkthrough."]],
+          "robustness, MLOps, and how to do research."],
+         ["VI - Domains, Theory and Systems", "36-46",
+          "Why generalization works at all, probabilistic modelling, "
+          "forecasting, recommenders, detection and segmentation, NLP and "
+          "retrieval, speech and multimodal models, GPUs and distributed "
+          "training, causal inference and A/B testing, privacy and security, "
+          "and a complete thirteen-stage project walkthrough."]],
         widths=[22, 14, 64], bold_first=True)
 
     h3("Reading paths")
@@ -504,17 +512,27 @@ def front_matter():
         "**Complete beginner (about 6 months, part-time):** Chapters 1 -> 2 -> 3 -> 4 "
         "-> 5 -> 6 -> 13 -> 9 -> 11, then Part III in order. Do the exercises at "
         "the end of every chapter before moving on.",
-        "**Starting a real project today:** read Chapter 36 first - it is the "
+        "**Starting a real project today:** read Chapter 46 first - it is the "
         "thirteen-stage procedure end to end - and follow its references back "
         "into the chapters as each stage needs them.",
         "**Programmer who wants deep learning fast:** skim 1-3, read 4, then jump "
         "to 14-20, then pick the architecture chapter that matches your data "
-        "(21 for images, 22-23 for sequences, 26 for graphs).",
+        "(21 and 40 for images, 22-23 for sequences, 26 for graphs, 38 for time "
+        "series).",
         "**Practitioner shipping to devices:** Part III as refresher, then 28-31 "
-        "(quantization, pruning, distillation, on-device training), 34 (MLOps) "
-        "and 36 (the full project walkthrough).",
-        "**Interview preparation:** 3, 5, 6, 13, 15, 17, 21, 23, plus the glossary "
-        "in Appendix B.",
+        "(quantization, pruning, distillation, on-device training), 43 "
+        "(hardware and memory arithmetic), 34 (MLOps) and 46 (the full project "
+        "walkthrough).",
+        "**Working on a specific domain:** go straight to its chapter and read "
+        "backwards - 38 time series, 39 recommenders, 40 vision beyond "
+        "classification, 41 NLP and retrieval, 42 speech and multimodal.",
+        "**Training or serving large models:** 23-24, then 43 (memory, "
+        "parallelism, MFU, serving) and 36 (scaling laws).",
+        "**Deciding rather than predicting:** 45 (causal inference and A/B "
+        "testing) with 13 (evaluation) - the pair that prevents the most "
+        "expensive mistakes in industry.",
+        "**Interview preparation:** 3, 5, 6, 13, 15, 17, 21, 23, 36, plus the "
+        "glossary in Appendix B.",
     ])
 
     h3("Conventions used throughout")
@@ -5625,6 +5643,2193 @@ def part5():
         "twenty abstracts per day. Reimplement one method per quarter - "
         "implementation is the only reading comprehension test that works.")
 
+
+# =============================================================================
+#              PART VI - APPLIED DOMAINS, THEORY AND SYSTEMS
+# =============================================================================
+def part6():
+    part("Applied Domains, Theory and Systems",
+         "Why generalization is possible at all, the probabilistic view of "
+         "learning, the four application domains with their own rules - time "
+         "series, recommenders, vision beyond classification, language, audio "
+         "and multimodal - the hardware and distributed systems that make scale "
+         "possible, causal questions that prediction cannot answer, and the "
+         "privacy and security obligations that come with shipping.")
+
+    # --------------------------------------------------------------- Ch 37 ---
+    chapter("Learning Theory: Why Generalization Is Possible At All",
+            newpage=False)
+    p("Chapter 3 showed empirically that a model can score well on training data "
+      "and badly on new data. This chapter answers the harder question behind "
+      "that observation: **why should fitting a finite sample ever tell you "
+      "anything about the infinite population it was drawn from?** The answer is "
+      "not obvious - and the theory that provides it also explains why some "
+      "model classes need thousands of samples and others need millions, and "
+      "why the classical story breaks in the deep-learning regime.")
+    box("key", "The one-sentence version",
+        "Generalization is possible because the number of genuinely different "
+        "functions a model class can express on n points grows slowly enough "
+        "that fitting the sample cannot be a coincidence - and the rate of that "
+        "growth, not the number of parameters, is the quantity that controls "
+        "the gap between training error and test error.")
+
+    h2("Empirical risk minimization, stated precisely")
+    p("Assume every example is drawn independently from a fixed but unknown "
+      "distribution D over pairs (x, y). This is the __i.i.d. assumption__ and "
+      "it is the load-bearing assumption of the whole field: break it and the "
+      "results below say nothing.")
+    eq(["True risk        R(h)     = E_(x,y)~D [ L(h(x), y) ]",
+        "Empirical risk   R_emp(h) = (1/n) SUM_i L(h(x_i), y_i)",
+        "ERM              h_hat    = argmin_(h in H) R_emp(h)"],
+       "You can compute the second line. You care about the first. The gap "
+       "between them is what theory bounds.")
+    p("Three quantities decompose the failure of the model you actually train:")
+    eq(["R(h_hat) - R(h*)   =   [ R(h_hat) - R_emp(h_hat) ]     generalization gap",
+        "                     + [ R_emp(h_hat) - R_emp(h_opt) ] optimization gap",
+        "                     + [ R_emp(h_opt) - R(h*) ]        approximation gap"],
+       "h* is the best possible predictor of all; h_opt is the best in your "
+       "class H; h_hat is what your optimizer returned.")
+    tbl(["Gap", "Cause", "What reduces it"],
+        [["Approximation", "H is too small to contain a good function",
+          "A richer model class: more capacity, better inductive bias, "
+          "pretraining"],
+         ["Optimization", "SGD did not reach the best point in H",
+          "Better optimizer, schedule, initialization, longer training"],
+         ["Generalization", "H is rich enough to fit noise in this sample",
+          "More data, regularization, restricting H, better inductive bias"]],
+        widths=[20, 40, 40], bold_first=True,
+        caption="Every disappointing model is one of these three. Diagnosing "
+                "which one you have is the entire content of Chapter 20's "
+                "playbook: train error high -> approximation or optimization; "
+                "train error low and test error high -> generalization.")
+
+    h2("A single hypothesis: Hoeffding's inequality")
+    p("Fix one hypothesis h __before__ looking at the data, and let the loss be "
+      "bounded in [0, 1]. Then R_emp(h) is an average of n independent bounded "
+      "random variables whose expectation is R(h). Hoeffding's inequality says "
+      "such an average concentrates:")
+    eq(["P( |R_emp(h) - R(h)| > eps )  <=  2 exp( -2 n eps^2 )"],
+       "The probability of being wrong by more than eps decays exponentially in "
+       "the number of samples.")
+    p("Inverting it: with probability at least 1 - delta over the draw of the "
+      "sample,")
+    eq(["|R_emp(h) - R(h)|  <=  sqrt( log(2/delta) / (2n) )"])
+    p("With n = 10,000 and delta = 0.05 this is about 0.0136 - a validation "
+      "score of 0.91 means the true accuracy is 0.91 plus or minus roughly one "
+      "and a half points. **This is the correct way to read a single held-out "
+      "number**, and it is why a 0.3-point improvement on a 2,000-row test set "
+      "is not an improvement at all.")
+    box("warn", "Why this is not yet a theory of learning",
+        "Hoeffding applies to a hypothesis chosen before the data. The one you "
+        "report was chosen __because__ it scored well - you searched. Searching "
+        "over many hypotheses and keeping the best is exactly the setting where "
+        "the maximum of many noisy numbers is biased upward. The rest of this "
+        "chapter pays for that search.")
+
+    h2("Finite hypothesis classes: the union bound")
+    p("Suppose H is finite with |H| elements. The bad event is that __some__ h "
+      "in H has a large gap. The union bound says the probability of a union is "
+      "at most the sum of probabilities:")
+    eq(["P( exists h : |R_emp(h) - R(h)| > eps )  <=  2 |H| exp( -2 n eps^2 )"])
+    p("Setting the right-hand side to delta and solving for eps gives the first "
+      "real generalization bound. With probability 1 - delta, __simultaneously "
+      "for every h in H__:")
+    eq(["R(h)  <=  R_emp(h)  +  sqrt( ( log|H| + log(2/delta) ) / (2n) )"],
+       "Uniform convergence: the bound holds for the hypothesis you picked "
+       "after searching, because it holds for all of them at once.")
+    box("math", "Worked numbers",
+        "Take a class of 20-bit decision rules, so |H| = 2^{20} = 1,048,576, "
+        "with n = 10,000 and delta = 0.05. Then log|H| = 20 log 2 = 13.86, "
+        "log(2/delta) = 3.69, the sum is 17.55, divided by 20,000 is 8.8e-4, "
+        "and the square root is **0.030**. Fitting a million-hypothesis class "
+        "on ten thousand samples costs about three accuracy points of "
+        "uncertainty. Halve the data and the penalty grows by sqrt(2); square "
+        "the class size and it grows by sqrt(2) as well - **the bound is "
+        "logarithmic in the size of the class and inverse-square-root in the "
+        "data**. That trade is the central fact of the subject.")
+    p("Two consequences follow immediately and are worth internalizing:")
+    bul([
+        "**The sqrt(1/n) rate.** To halve your uncertainty you need four times "
+        "the data. This is why data collection has diminishing returns, and why "
+        "learning curves flatten (Chapter 3).",
+        "**The log|H| price of search.** Trying 1,000 hyperparameter "
+        "configurations on the validation set is a class of size 1,000; the "
+        "penalty is sqrt(log 1000 / 2n), small but real. Trying 100,000 is only "
+        "1.5x worse in the bound - but only if each was evaluated on a fresh "
+        "sample, which it was not. This is the formal reason for a test set "
+        "used exactly once.",
+    ])
+
+    h2("Infinite classes: shattering and VC dimension")
+    p("Linear classifiers form an infinite class, so log|H| is infinite and the "
+      "bound above is vacuous. The fix is to count not hypotheses but "
+      "__behaviours on n points__. Two hypotheses that label every point in "
+      "your sample identically are indistinguishable from the sample's point of "
+      "view.")
+    eq(["Growth function   Pi_H(n) = max over n points of the number of",
+        "                            distinct labelings H can produce",
+        "                            (at most 2^n)"])
+    p("A set of points is __shattered__ by H if H realizes all 2^n labelings of "
+      "it. The **VC dimension** d_VC is the size of the largest set that H can "
+      "shatter.")
+    tbl(["Hypothesis class", "VC dimension", "Note"],
+        [["Thresholds on the line, x > a", "1", "Cannot shatter two points "
+          "labelled (1, 0) left-to-right"],
+         ["Intervals [a, b] on the line", "2", ""],
+         ["Linear classifiers in R^d (with bias)", "d + 1", "3 points in the "
+          "plane, in general position, can be shattered; 4 cannot"],
+         ["Axis-aligned rectangles in R^2", "4", ""],
+         ["1-nearest neighbour", "infinite", "Fits any labeling - and yet works; "
+          "see the caveat below"],
+         ["Neural net, W weights, ReLU", "O(W L log W)", "L = depth; the bound "
+          "is loose but shows parameters matter"]],
+        widths=[40, 22, 38], bold_first=True)
+    p("Sauer's lemma is the combinatorial miracle that makes this useful: once n "
+      "exceeds d_VC, the growth function stops doubling and becomes polynomial.")
+    eq(["Pi_H(n)  <=  SUM_(i=0..d_VC) C(n, i)   <=  ( e n / d_VC )^d_VC"],
+       "Exponential below the VC dimension, polynomial above it - a phase "
+       "transition at n = d_VC.")
+    p("Substituting the polynomial growth function for |H| gives the VC bound: "
+      "with probability 1 - delta,")
+    eq(["R(h)  <=  R_emp(h)  +  O( sqrt( ( d_VC log(n/d_VC) + log(1/delta) ) / n ) )"])
+    box("key", "The practical reading of the VC bound",
+        "You need on the order of d_VC samples (times a logarithmic factor) "
+        "before the training error means anything. This is the rigorous version "
+        "of the folklore '10 to 100 samples per parameter' rule quoted for "
+        "classical models in Chapter 3 - and the reason that rule is quoted for "
+        "**classical** models only.")
+
+    h2("Rademacher complexity and margin bounds")
+    p("VC dimension has two weaknesses: it ignores the data distribution, and it "
+      "counts only labelings, not confidence. **Rademacher complexity** fixes "
+      "the first by measuring how well the class can fit random noise __on your "
+      "actual sample__:")
+    eq(["R_n(H) = E_sigma [ sup_(h in H) (1/n) SUM_i sigma_i h(x_i) ]",
+        "         sigma_i = +1 or -1 with probability 1/2 each"],
+       "The expected best correlation between a hypothesis and a coin flip. "
+       "Zero for a constant class; 1 for a class that can fit anything.")
+    p("This is directly measurable: shuffle your labels and train. If the model "
+      "reaches high training accuracy on randomized labels, its effective "
+      "complexity on your data is large. That experiment - **the randomization "
+      "test** - is the single most informative diagnostic in this chapter, and "
+      "it should be part of any serious project.")
+    eq(["R(h)  <=  R_emp(h)  +  2 R_n(H)  +  3 sqrt( log(2/delta) / (2n) )"])
+    p("Margin bounds fix the second weakness. For classifiers that output a real "
+      "score, a prediction that is correct by a wide margin is more robust than "
+      "one that barely crosses the boundary. The margin bound replaces the "
+      "0/1 training error with the fraction of points whose margin is below "
+      "gamma, and scales the complexity term by 1/gamma:")
+    eq(["R(h)  <=  R_gamma_emp(h)  +  O( R_n(H) / gamma )  +  small term"],
+       "Large margins buy generalization. This is the theory behind SVMs "
+       "(Chapter 10) and behind why weight decay and normalization help deep "
+       "networks: both control the scale-sensitive complexity in the numerator.")
+
+    h2("Where the classical story breaks: double descent")
+    p("Modern networks have far more parameters than samples, can fit random "
+      "labels perfectly (so their Rademacher complexity is near 1), and yet "
+      "generalize well on real labels. Uniform-convergence bounds computed for "
+      "the full class are therefore vacuous - they permit test errors above 1. "
+      "This is not a flaw in the theorems; it means the bounds are being applied "
+      "to the wrong class. The class that matters is not 'all networks of this "
+      "size' but 'the networks SGD actually reaches from this initialization'.")
+    diagram([
+        " test",
+        " error",
+        "   |*                                     classical U-curve",
+        "   | *                                    (underfit -> sweet spot -> overfit)",
+        "   |  *          #",
+        "   |   *       #   #     <- interpolation threshold: params ~ samples",
+        "   |    *    #      #",
+        "   |     ***#        #",
+        "   |        #          # # #",
+        "   |                        # # # #  <- modern regime: error falls again",
+        "   +-------------------------------------------------> model capacity",
+        "        classical         |          overparameterized",
+    ], "Double descent. The classical bias-variance curve (*) is the left half; "
+       "past the interpolation threshold the curve descends a second time (#).")
+    p("The mechanism, in one paragraph: exactly at the interpolation threshold "
+      "there is essentially one way to fit the data, and it is a wildly "
+      "oscillating one, so the variance term explodes. Well past the threshold "
+      "there are infinitely many interpolating solutions, and gradient descent "
+      "with small initialization finds one of the __smoothest__ of them - "
+      "implicit regularization. Capacity stops being the relevant axis; the "
+      "bias of the optimization algorithm takes over. The same effect appears "
+      "in **epoch-wise** double descent (test error rises then falls again as "
+      "training continues) and **sample-wise** double descent (more data "
+      "temporarily hurts near the threshold).")
+    box("expert", "Implicit regularization, concretely",
+        "For separable data, gradient descent on logistic loss converges in "
+        "direction to the maximum-margin separator, even with no explicit "
+        "penalty - a result of Soudry et al. For linear regression solved by "
+        "gradient descent from zero, the solution converges to the minimum-norm "
+        "interpolant. Neither is imposed; both fall out of the trajectory. This "
+        "is why 'the optimizer is part of the model class' is the correct modern "
+        "framing, and why a bound that ignores the optimizer cannot be tight.")
+
+    h2("Scaling laws: the empirical theory that replaced the bounds")
+    p("For large models, practitioners predict performance not from VC bounds "
+      "but from measured power laws. Across many orders of magnitude, loss "
+      "falls as a power of parameters N, dataset size D, and compute C:")
+    eq(["L(N) = L_inf + (N_c / N)^alpha_N          alpha_N ~ 0.07 for LLMs",
+        "L(D) = L_inf + (D_c / D)^alpha_D          alpha_D ~ 0.10",
+        "L(C) = L_inf + (C_c / C)^alpha_C",
+        "Compute            C ~ 6 N D  FLOPs for a dense Transformer"],
+       "The 6ND rule: 2ND for the forward pass, 4ND for the backward pass, per "
+       "token per parameter.")
+    p("The Chinchilla result is the practically important one: for a fixed "
+      "compute budget, N and D should be scaled **in equal proportion**, giving "
+      "roughly 20 training tokens per parameter as the compute-optimal ratio. "
+      "Models trained before that result were badly undertrained relative to "
+      "their size, which is why a well-trained 7B model can beat a 175B model "
+      "from an earlier generation. In deployment the calculus shifts again: if "
+      "you will serve billions of tokens, training a smaller model on more data "
+      "than Chinchilla-optimal is cheaper overall, because inference cost scales "
+      "with N and not with D.")
+    tbl(["Budget question", "What the laws say"],
+        [["I have 10x more compute. What do I change?",
+          "About 3.2x parameters and 3.2x tokens - not 10x either one."],
+         ["My loss curve is above the law's prediction.",
+          "Something is broken: data quality, learning rate, or duplication. "
+          "The law is a ceiling you should nearly reach."],
+         ["Should I train longer or grow the model?",
+          "Below 20 tokens/parameter, train longer. Above it, and if inference "
+          "cost is not dominant, grow."],
+         ["Does this apply to my 50k-row tabular problem?",
+          "No. Power-law extrapolation is validated for large-scale "
+          "pretraining, not small supervised datasets."]],
+        widths=[36, 64], bold_first=True)
+
+    h2("What theory gives you, and what it does not")
+    tbl(["Theory delivers", "Theory does not deliver"],
+        [["The sqrt(1/n) rate, so you can budget data",
+          "A usable numeric bound for a deep network"],
+         ["The formal cost of searching over models",
+          "Permission to skip a held-out test set"],
+         ["Why margins, norms and smoothness help",
+          "Which architecture will win on your data"],
+         ["Why i.i.d. violations are fatal, not cosmetic",
+          "Any guarantee at all under distribution shift"],
+         ["The randomization test as a diagnostic",
+          "A replacement for measurement"]],
+        widths=[50, 50])
+    box("tip", "The three things to carry away",
+        "1. Report held-out numbers with an interval, computed from n. "
+        "2. Every model you compare on the validation set enlarges the class "
+        "you are implicitly searching, so keep the test set sacred. "
+        "3. Run the label-randomization test once on any new architecture: if "
+        "it memorizes noise as fast as it learns signal, your regularization "
+        "and your data budget both need attention.")
+
+    h3("Exercises")
+    bul([
+        "Compute the Hoeffding interval for your own validation set size at "
+        "delta = 0.05. Compare it with the improvements you have been claiming "
+        "in the last month.",
+        "Show that the VC dimension of thresholds on the line is 1 by "
+        "exhibiting a shattered set of size 1 and proving no set of size 2 is "
+        "shattered.",
+        "Verify Sauer's lemma numerically for d_VC = 3 and n = 10: compare "
+        "2^{10} with the sum of binomial coefficients up to 3.",
+        "Run the randomization test: shuffle the labels of your training set "
+        "and train the same model. Record how many epochs it needs to reach "
+        "90% training accuracy, and compare with the true-label run.",
+        "Reproduce epoch-wise double descent on a small network: train far past "
+        "the point where test error first rises, and plot the whole curve.",
+    ], ordered=True)
+
+    # --------------------------------------------------------------- Ch 38 ---
+    chapter("Probabilistic Machine Learning: Bayes, EM, HMMs and Gaussian "
+            "Processes")
+    p("Most of this book optimizes a single set of parameters. The probabilistic "
+      "view keeps a __distribution__ over parameters and over hidden structure "
+      "instead. It costs more computation and buys three things nothing else "
+      "gives you: honest uncertainty on small data, a principled way to handle "
+      "missing and latent variables, and a language in which regularization, "
+      "clustering, sequence models and active learning turn out to be the same "
+      "idea seen from different angles.")
+
+    h2("The Bayesian recipe in one page")
+    eq(["Prior          p(theta)              belief before data",
+        "Likelihood     p(D | theta)          how the model explains data",
+        "Posterior      p(theta | D) = p(D|theta) p(theta) / p(D)",
+        "Evidence       p(D) = INTEGRAL p(D|theta) p(theta) d(theta)",
+        "Predictive     p(y* | x*, D) = INTEGRAL p(y*|x*,theta) p(theta|D) d(theta)"],
+       "Learning is conditioning; prediction is averaging over everything you "
+       "still do not know.")
+    tbl(["Estimator", "Objective", "Uncertainty", "Cost"],
+        [["MLE", "max p(D | theta)", "None (a point)", "One optimization"],
+         ["MAP", "max p(D | theta) p(theta)", "None (a point)",
+          "One optimization"],
+         ["Full Bayes", "the whole posterior", "Full", "Integration: "
+          "conjugacy, VI or MCMC"]],
+        widths=[16, 34, 22, 28], bold_first=True)
+    box("math", "Ridge regression is a Gaussian prior - the derivation",
+        "Take a Gaussian likelihood y = x.w + noise with noise variance s^2, "
+        "and a Gaussian prior w ~ N(0, t^2 I). The log posterior is "
+        "-(1/2s^2) SUM (y_i - x_i.w)^2 - (1/2t^2) ||w||^2 + const. Maximizing "
+        "it is exactly minimizing SUM (y_i - x_i.w)^2 + lambda ||w||^2 with "
+        "lambda = s^2 / t^2. **Ridge is MAP under a Gaussian prior; Lasso is "
+        "MAP under a Laplace prior.** Every penalty in Chapter 7 is a prior in "
+        "disguise, and the strength of the penalty is a ratio of variances.")
+
+    h2("Conjugacy, worked on real numbers")
+    p("A prior is __conjugate__ to a likelihood when the posterior stays in the "
+      "same family, so updating is arithmetic rather than integration. The "
+      "Beta-Bernoulli pair is the one to know by heart.")
+    eq(["Prior       Beta(a, b)",
+        "Data        h heads and t tails out of n = h + t Bernoulli trials",
+        "Posterior   Beta(a + h, b + t)",
+        "Mean        (a + h) / (a + b + n)"],
+       "The prior acts as a + b pseudo-counts you saw before the experiment.")
+    p("Toss a coin ten times and see 7 heads. With a uniform prior Beta(1,1) the "
+      "posterior is Beta(8,4): posterior mean 8/12 = **0.667**, against the MLE "
+      "of 0.700. The 95% credible interval runs from about 0.39 to 0.89 - which "
+      "is the honest answer after ten tosses, and exactly what a point estimate "
+      "hides. Add 90 more tosses with 63 more heads and the posterior becomes "
+      "Beta(71,31): mean 0.696, interval 0.60 to 0.78. **The prior's influence "
+      "decays like 1/n**; with enough data Bayes and MLE agree, which is why "
+      "the argument only matters in the small-data regime where it should.")
+    tbl(["Likelihood", "Conjugate prior", "Posterior update", "Typical use"],
+        [["Bernoulli / Binomial", "Beta(a, b)", "a += successes, b += failures",
+          "Click-through rate, A/B tests"],
+         ["Categorical / Multinomial", "Dirichlet(alpha)", "alpha += counts",
+          "Topic models, naive Bayes smoothing"],
+         ["Poisson", "Gamma(a, b)", "a += SUM x, b += n", "Counts, arrivals"],
+         ["Gaussian, known variance", "Gaussian", "Precision-weighted average",
+          "Kalman filters, sensor fusion"],
+         ["Gaussian, unknown both", "Normal-Inverse-Gamma", "Closed form",
+          "Small-sample regression"]],
+        widths=[24, 22, 30, 24], bold_first=True)
+    box("tip", "Where conjugacy earns its keep in production",
+        "Ranking items by click-through rate with tiny denominators. A raw rate "
+        "of 1/1 beats 480/1000, which is absurd. Ranking by the posterior mean "
+        "of Beta(1 + clicks, 1 + misses) - or better, by a lower credible bound - "
+        "fixes it with two lines of code and no model. Thompson sampling for "
+        "bandits is the same posterior, sampled instead of averaged.")
+
+    h2("Latent variables and the EM algorithm")
+    p("Many models are easy if you know a hidden label z and easy if you know "
+      "the parameters, but hard when both are unknown: which cluster produced "
+      "this point, which topic produced this word, which state emitted this "
+      "observation. Expectation-Maximization alternates the two easy problems.")
+    eq(["Goal        max_theta  log p(X | theta) = log SUM_z p(X, z | theta)",
+        "ELBO        log p(X|theta) >= E_q(z)[ log p(X,z|theta) ] + H(q)",
+        "E-step      q(z) <- p(z | X, theta_old)      makes the bound tight",
+        "M-step      theta <- argmax E_q(z)[ log p(X, z | theta) ]"],
+       "Each step increases the true log-likelihood, so EM converges - to a "
+       "local optimum, which is why initialization matters.")
+    h3("Gaussian mixture model: the update equations")
+    eq(["E-step (responsibility of component k for point i):",
+        "  r_ik = pi_k N(x_i | mu_k, S_k) / SUM_j pi_j N(x_i | mu_j, S_j)",
+        "M-step:",
+        "  N_k  = SUM_i r_ik",
+        "  mu_k = (1/N_k) SUM_i r_ik x_i",
+        "  S_k  = (1/N_k) SUM_i r_ik (x_i - mu_k)(x_i - mu_k)^T",
+        "  pi_k = N_k / n"],
+       "k-means is the limit of this as all covariances shrink to zero: "
+       "responsibilities become hard 0/1 assignments and the M-step becomes "
+       "'average the members'.")
+    box("math", "One EM iteration by hand",
+        "Points 1, 2, 8, 9 on the line. Start with mu_1 = 2, mu_2 = 7, both "
+        "variances 4, equal weights. For x = 8 the squared distances are 36 and "
+        "1, so the unnormalized responsibilities are exp(-36/8) = 0.0111 and "
+        "exp(-1/8) = 0.8825; normalized, r = 0.0124 and 0.9876. Repeating for "
+        "all four points, the responsibility of component 2 is 0.0124, 0.0421, "
+        "0.9876, 0.9964. The M-step then gives N_2 = 2.0385 and "
+        "mu_2 = (1(0.0124) + 2(0.0421) + 8(0.9876) + 9(0.9964)) / 2.0385 = "
+        "**8.32**, and symmetrically mu_1 = **1.55** - already almost the right "
+        "answer after a single pass. **Soft assignment is the only difference "
+        "from k-means**, and it is what lets the model report that a point "
+        "between clusters is genuinely ambiguous.")
+
+    code([
+        "# GMM in NumPy - the whole algorithm is these ten lines",
+        "for _ in range(n_iter):",
+        "    # E-step: responsibilities, shape (n, K)",
+        "    logp = np.stack([np.log(pi[k]) + gauss_logpdf(X, mu[k], S[k])",
+        "                     for k in range(K)], axis=1)",
+        "    logp -= logsumexp(logp, axis=1, keepdims=True)   # stable softmax",
+        "    R = np.exp(logp)",
+        "    # M-step",
+        "    Nk = R.sum(0) + 1e-10",
+        "    mu = (R.T @ X) / Nk[:, None]",
+        "    for k in range(K):",
+        "        d = X - mu[k]",
+        "        S[k] = (R[:, k, None] * d).T @ d / Nk[k] + 1e-6 * np.eye(D)",
+        "    pi = Nk / len(X)",
+    ], "Always work in log space and always add a small ridge to the covariance: "
+       "a component that captures a single point drives its covariance to zero "
+       "and the likelihood to infinity. That singularity is the classic GMM "
+       "failure.")
+
+    h2("Hidden Markov models and dynamic programming")
+    p("An HMM adds time: a hidden state evolves as a Markov chain and each state "
+      "emits an observation. It remains the right model when states are "
+      "genuinely discrete and interpretable - activity recognition, keyword "
+      "spotting, gene finding, fault modes - and it is far cheaper than a "
+      "recurrent network.")
+    eq(["Parameters   pi (initial), A (transitions), B (emissions)",
+        "Forward      alpha_t(j) = b_j(o_t) SUM_i alpha_(t-1)(i) A_ij",
+        "Backward     beta_t(i)  = SUM_j A_ij b_j(o_(t+1)) beta_(t+1)(j)",
+        "Likelihood   p(O) = SUM_i alpha_T(i)",
+        "Viterbi      d_t(j) = b_j(o_t) MAX_i d_(t-1)(i) A_ij   (+ backpointers)",
+        "Learning     Baum-Welch = EM with forward-backward in the E-step"],
+       "Forward sums over paths; Viterbi maximizes over paths. Same recursion, "
+       "different semiring - and the same trick as beam search in Chapter 24.")
+    box("math", "Viterbi on three steps, by hand",
+        "States Rain and Sun; start 0.6/0.4; transitions Rain->Rain 0.7, "
+        "Sun->Sun 0.6; emissions p(umbrella | Rain) = 0.9, p(umbrella | Sun) = "
+        "0.2. Observe umbrella, umbrella, no-umbrella. t=1: Rain 0.6*0.9 = "
+        "0.54, Sun 0.4*0.2 = 0.08. t=2: Rain = 0.9 * max(0.54*0.7, 0.08*0.4) = "
+        "0.9*0.378 = 0.340; Sun = 0.2 * max(0.54*0.3, 0.08*0.6) = 0.2*0.162 = "
+        "0.0324. t=3: Rain = 0.1 * max(0.340*0.7, 0.0324*0.4) = 0.0238; Sun = "
+        "0.8 * max(0.340*0.3, 0.0324*0.6) = 0.8*0.102 = 0.0816. The best final "
+        "state is Sun, and its backpointer chain gives **Rain, Rain, Sun**. "
+        "Note that the third observation flipped the state even though Rain was "
+        "far ahead - evidence propagates, which is the point of the model.")
+    p("Work in log space for any real sequence: alpha underflows within a few "
+      "dozen steps in single precision. The Kalman filter is the same set of "
+      "recursions for continuous states with linear-Gaussian dynamics, and a "
+      "particle filter is their Monte Carlo version for nonlinear ones.")
+
+    h2("Gaussian processes: distributions over functions")
+    p("Instead of a prior over weights, put a prior directly over functions. A "
+      "GP says: for any finite set of inputs, the function values are jointly "
+      "Gaussian, with covariance given by a kernel k(x, x') that encodes how "
+      "similar two inputs are.")
+    eq(["Prior        f ~ GP( m(x), k(x, x') ),   usually m = 0",
+        "RBF kernel   k(x,x') = s_f^2 exp( -||x - x'||^2 / (2 l^2) )",
+        "Posterior mean  mu*  = K_*  [K + s_n^2 I]^-1  y",
+        "Posterior cov   S*   = K_** - K_* [K + s_n^2 I]^-1 K_*^T"],
+       "K is (n,n) over training inputs, K_* is (m,n) between test and training "
+       "inputs, K_** is (m,m) over test inputs.")
+    p("Two hyperparameters carry the meaning. The **lengthscale l** is how far "
+      "you must move in input space before the function may change; the "
+      "**signal variance s_f^2** is how far it may move vertically. Both are "
+      "fitted by maximizing the marginal likelihood, which trades data fit "
+      "against model complexity automatically - Occam's razor falls out of the "
+      "log-determinant term rather than being imposed.")
+    box("math", "A two-point GP, computed",
+        "Observe f(0) = 1 and f(2) = 3 with noise variance 0.01, an RBF kernel "
+        "with s_f = 1 and l = 1. Then k(0,0) = k(2,2) = 1 and k(0,2) = "
+        "exp(-4/2) = 0.1353, so K + s_n^2 I = [[1.01, 0.1353], [0.1353, 1.01]]. "
+        "Solving that system against y = (1, 3) gives alpha = (0.6029, 2.8895). "
+        "Predict at x* = 1: k_* = (exp(-0.5), exp(-0.5)) = (0.6065, 0.6065), so "
+        "the posterior mean is 0.6065(0.6029 + 2.8895) = **2.12** and the "
+        "posterior variance is 1 - k_*^T K^-1 k_* = **0.358**, a standard "
+        "deviation of 0.60. Midway between two observations one lengthscale "
+        "apart, the GP interpolates and still reports substantial uncertainty. "
+        "At x* = 10 the kernel vector is numerically zero, so the mean returns "
+        "to the prior mean 0 and the variance to 1 - **a GP knows when it is "
+        "extrapolating**, which is the property no plain neural network has for "
+        "free.")
+
+    tbl(["Property", "Gaussian process", "Neural network"],
+        [["Cost", "O(n^3) to fit, O(n^2) per prediction", "O(n) per epoch"],
+         ["Practical data size", "Up to ~10k exactly; sparse/inducing methods "
+          "beyond", "Unbounded"],
+         ["Uncertainty", "Exact and calibrated under the prior", "Requires "
+          "ensembles or approximations (Chapter 33)"],
+         ["Priors", "Explicit in the kernel: smoothness, periodicity, linear "
+          "trends", "Implicit in architecture and initialization"],
+         ["High-dimensional raw input", "Weak without a learned kernel",
+          "The reason deep learning exists"]],
+        widths=[20, 42, 38], bold_first=True)
+    p("The killer application is **Bayesian optimization**: when each evaluation "
+      "is expensive - a training run, a lab experiment, a hardware measurement - "
+      "fit a GP to the results so far and pick the next point by maximizing an "
+      "acquisition function such as expected improvement or the upper confidence "
+      "bound mu(x) + kappa sigma(x). This is why GPs are the standard engine "
+      "inside hyperparameter tuners for budgets of tens to a few hundred trials, "
+      "where random search is wasteful and grid search is hopeless.")
+
+    h2("When the integral is intractable: VI and MCMC")
+    p("Conjugacy is a luxury. For everything else there are two families of "
+      "approximation, and the choice between them is the classic speed-versus-"
+      "accuracy trade in probabilistic modelling.")
+    eq(["Variational inference:  pick q(theta) in a simple family,",
+        "  maximize  ELBO(q) = E_q[ log p(D, theta) ] - E_q[ log q(theta) ]",
+        "          = log p(D) - KL( q || p(theta|D) )",
+        "so maximizing the ELBO minimizes KL to the true posterior."],
+       "This is the same ELBO as the VAE in Chapter 25 - there, q is produced by "
+       "an encoder network instead of being optimized per data point.")
+    tbl(["", "Variational inference", "MCMC"],
+        [["Idea", "Turn integration into optimization", "Sample a chain whose "
+          "stationary distribution is the posterior"],
+         ["Speed", "Fast, scales to large data with mini-batches",
+          "Slow; typically thousands of passes"],
+         ["Bias", "Biased: limited to the chosen family; mean-field q "
+          "underestimates variance", "Asymptotically exact"],
+         ["Workhorse", "ADVI, Bayes-by-backprop, VAEs",
+          "Metropolis-Hastings, Gibbs, HMC / NUTS"],
+         ["Diagnostics", "ELBO trace; compare families",
+          "R-hat < 1.01, effective sample size, divergences"]],
+        widths=[14, 43, 43], bold_first=True)
+    code([
+        "# Metropolis-Hastings: the entire algorithm",
+        "theta = theta_init",
+        "for t in range(T):",
+        "    prop = theta + step * np.random.randn(*theta.shape)",
+        "    log_ratio = log_post(prop) - log_post(theta)      # prior + likelihood",
+        "    if np.log(np.random.rand()) < log_ratio:",
+        "        theta = prop                                   # accept",
+        "    chain.append(theta)",
+        "# Tune 'step' for an acceptance rate near 0.234 for high-dimensional",
+        "# random-walk proposals; discard the first half as burn-in.",
+    ])
+    box("warn", "The three ways probabilistic models are misused",
+        "Reporting a posterior interval as if it were a frequentist confidence "
+        "interval when the prior was chosen carelessly; running a chain for a "
+        "few hundred steps and never checking R-hat, so the 'posterior' is a "
+        "record of where the chain happened to start; and using mean-field VI "
+        "and then quoting its variance, which is systematically too small. All "
+        "three produce confident numbers that are wrong in the same direction: "
+        "too certain.")
+
+    h2("Choosing your weapon")
+    tbl(["Situation", "Use"],
+        [["Under ~1,000 rows, uncertainty matters", "Bayesian model with "
+          "conjugate or GP structure"],
+         ["Cheap ranking of items with small counts", "Beta posterior mean or "
+          "lower bound"],
+         ["Hidden discrete structure over time", "HMM (Baum-Welch); a "
+          "recurrent net only if you have far more data"],
+         ["Expensive black-box tuning, < 200 trials", "GP Bayesian optimization"],
+         ["Millions of rows, uncertainty is secondary", "Deep model plus an "
+          "ensemble or temperature scaling (Chapter 33)"],
+         ["You need a probability you will act on financially",
+          "Full posterior if the model is small; deep ensemble plus calibration "
+          "if it is not"]],
+        widths=[44, 56], bold_first=True)
+
+    h3("Exercises")
+    bul([
+        "Derive the Beta-Bernoulli posterior from Bayes' rule and confirm that "
+        "the posterior mean lies between the prior mean and the MLE.",
+        "Implement the ten-line GMM above and run it on the four points 1, 2, "
+        "8, 9. Verify the responsibilities quoted in the box.",
+        "Implement Viterbi and reproduce the umbrella example, then check that "
+        "the forward algorithm gives the total probability of the observation "
+        "sequence.",
+        "Fit a GP with an RBF kernel to five points of a sine wave and plot the "
+        "mean with two-standard-deviation bands. Increase the lengthscale by "
+        "10x and explain what happens to both.",
+        "Take a logistic regression with 200 rows, fit it by MAP and then by "
+        "Metropolis-Hastings, and compare the coefficient intervals with the "
+        "bootstrap intervals from Chapter 13.",
+    ], ordered=True)
+
+    # --------------------------------------------------------------- Ch 39 ---
+    chapter("Time Series and Forecasting")
+    p("Time series break the assumption every earlier chapter rested on: the "
+      "rows are not independent, and the future is not exchangeable with the "
+      "past. That single change invalidates random splits, ordinary "
+      "cross-validation, most feature engineering habits, and the intuition "
+      "that more model capacity helps. It also creates the most common "
+      "catastrophic bug in applied machine learning - a feature that quietly "
+      "contains the future.")
+
+    h2("What makes a time series different")
+    tbl(["Property", "Consequence"],
+        [["Observations are ordered and autocorrelated",
+          "Random shuffling leaks the future into training; only time-ordered "
+          "splits are valid"],
+         ["The distribution drifts (non-stationarity)",
+          "A model fitted on 2019 may be structurally wrong in 2024, not just "
+          "stale"],
+         ["Seasonality at several periods at once",
+          "Daily, weekly and yearly cycles superimpose; each needs its own "
+          "representation"],
+         ["The horizon is part of the problem",
+          "Predicting one step ahead and 28 steps ahead are different tasks "
+          "with different achievable errors"],
+         ["Data is revised after the fact",
+          "The value you have today for last Tuesday may not be the value that "
+          "was available last Tuesday"]],
+        widths=[34, 66], bold_first=True)
+    box("warn", "The number one bug in forecasting",
+        "Computing any statistic over the whole series before splitting: a "
+        "global mean and standard deviation for scaling, a target encoding, an "
+        "imputation fill, a de-seasonalizing step. Every one of them carries "
+        "future information backwards and produces a backtest that cannot be "
+        "reproduced in production. **Fit every transformation on the training "
+        "window only, then apply it forward.**")
+
+    h2("Decomposition: trend, seasonality, remainder")
+    eq(["Additive         y_t = T_t + S_t + R_t",
+        "Multiplicative   y_t = T_t * S_t * R_t   (log => additive)"],
+       "Use multiplicative when the seasonal swing grows with the level - retail "
+       "sales, traffic. Taking logs first is usually simpler than changing "
+       "model families.")
+    p("STL decomposition (seasonal-trend by LOESS) is the workhorse: robust to "
+      "outliers, handles a changing seasonal shape, and gives you three series "
+      "to inspect. Plot them before modelling anything. Most 'the model is "
+      "broken' reports resolve into 'the seasonality changed in March' once the "
+      "decomposition is on screen.")
+
+    h2("Stationarity, differencing, ACF and PACF")
+    p("A series is (weakly) stationary if its mean, variance and autocovariance "
+      "do not depend on t. Classical models require it; ML models tolerate "
+      "non-stationarity only if you give them the right features. Differencing "
+      "is the standard cure.")
+    eq(["First difference     z_t = y_t - y_(t-1)          removes a linear trend",
+        "Seasonal difference  z_t = y_t - y_(t-m)          removes a period-m cycle",
+        "ACF(k)   = corr( y_t, y_(t-k) )         total correlation at lag k",
+        "PACF(k)  = corr of the part of y_t and y_(t-k) not explained by lags 1..k-1"])
+    tbl(["Pattern in the plots", "Reading"],
+        [["ACF decays slowly, almost linearly", "Non-stationary: difference it"],
+         ["ACF cuts off after lag q, PACF decays", "MA(q)"],
+         ["PACF cuts off after lag p, ACF decays", "AR(p)"],
+         ["Both decay", "ARMA(p,q); choose orders by AIC"],
+         ["Spike at lag m and its multiples", "Seasonal component of period m"]],
+        widths=[42, 58], bold_first=True)
+    p("The augmented Dickey-Fuller test formalizes the first row, but the plot "
+      "is usually enough and always more informative. Note that differencing "
+      "twice when once was enough injects noise - prefer the smallest d that "
+      "makes the ACF decay quickly.")
+
+    h2("The classical families")
+    eq(["AR(p)      y_t = c + SUM_(i=1..p) phi_i y_(t-i) + e_t",
+        "MA(q)      y_t = c + e_t + SUM_(j=1..q) theta_j e_(t-j)",
+        "ARIMA(p,d,q)  = ARMA(p,q) applied to the d-times differenced series",
+        "SARIMA(p,d,q)(P,D,Q)_m adds the same structure at the seasonal lag m",
+        "ETS        exponential smoothing of Error, Trend, Seasonal components"])
+    box("math", "AR(1) by hand, and what its coefficient means",
+        "Series 10, 12, 11, 13, 12 with mean 11.6. Centred: -1.6, 0.4, -0.6, "
+        "1.4, 0.4. The lag-1 autocovariance is the average of the products of "
+        "consecutive centred values: (-1.6)(0.4) + (0.4)(-0.6) + (-0.6)(1.4) + "
+        "(1.4)(0.4) = -0.64 - 0.24 - 0.84 + 0.56 = -1.16, divided by 5 gives "
+        "-0.232. The variance is (2.56 + 0.16 + 0.36 + 1.96 + 0.16)/5 = 1.04. "
+        "So phi = -0.232/1.04 = **-0.223**: a negative coefficient, meaning the "
+        "series alternates - a high value tends to be followed by a low one. "
+        "The forecast for t = 6 is 11.6 + (-0.223)(12 - 11.6) = **11.51**, and "
+        "every further step decays geometrically back to the mean. **An AR(1) "
+        "forecast reverts to the mean at rate phi^h; if your business problem "
+        "needs a long horizon, an AR model will give you a flat line and be "
+        "right to do so.**")
+    p("Holt-Winters (ETS with additive trend and seasonality) remains an "
+      "excellent default for short, seasonal, low-noise series and takes three "
+      "smoothing parameters. In the M4 and M5 forecasting competitions, simple "
+      "statistical methods and their combinations beat most sophisticated "
+      "entries; the winning entries were hybrids that used a global learned "
+      "model on top of classical structure. **Always fit the classical baseline "
+      "first.**")
+
+    h2("The machine-learning approach: supervised windows")
+    p("Reframe forecasting as regression: build a table whose row t contains "
+      "features known strictly before t and whose target is y at t + h. This is "
+      "the approach that wins most business forecasting problems, because it "
+      "absorbs covariates - price, promotions, weather, holidays - that "
+      "classical models handle awkwardly.")
+    code([
+        "# Direct multi-horizon framing: one model per horizon h",
+        "def make_features(df, h):",
+        "    X = pd.DataFrame(index=df.index)",
+        "    for lag in [h, h+1, h+2, h+7, h+14, h+28]:      # never lag < h",
+        "        X[f'lag_{lag}'] = df['y'].shift(lag)",
+        "    for w in [7, 28]:",
+        "        X[f'roll_mean_{w}'] = df['y'].shift(h).rolling(w).mean()",
+        "        X[f'roll_std_{w}']  = df['y'].shift(h).rolling(w).std()",
+        "    X['dow']   = df.index.dayofweek",
+        "    X['month'] = df.index.month",
+        "    X['is_holiday'] = df['holiday'].astype(int)      # known in advance",
+        "    y = df['y'].shift(-0)                            # target at time t",
+        "    return X, y",
+    ], "The shift(h) on every rolling statistic is the whole game: at the moment "
+       "of prediction you know values up to t - h, and nothing after. Write this "
+       "function once, review it twice, and never compute a rolling window "
+       "without an accompanying shift.")
+    tbl(["Strategy", "How", "Trade-off"],
+        [["Recursive", "One one-step model, feed predictions back in",
+          "Cheap; errors compound over the horizon"],
+         ["Direct", "One model per horizon h", "No compounding; h models to "
+          "train and maintain"],
+         ["Multi-output", "One model predicting the whole horizon vector",
+          "Shares structure; needs a model that supports vector targets"]],
+        widths=[16, 44, 40], bold_first=True)
+    box("tip", "Local versus global models",
+        "A __local__ model is fitted per series (one ARIMA per SKU). A "
+        "__global__ model is one model fitted across all series with the series "
+        "identity as a feature or embedding. Global models win when you have "
+        "many related series with short histories - they borrow strength - and "
+        "they are how gradient boosting and modern deep forecasters take retail "
+        "problems with 50,000 SKUs. Local models win when series are few, long "
+        "and genuinely unrelated.")
+
+    h2("Deep learning for forecasting")
+    tbl(["Model", "Idea", "When it is worth it"],
+        [["DeepAR", "Autoregressive RNN emitting distribution parameters per "
+          "step", "Many related series, probabilistic output required"],
+         ["N-BEATS / N-HiTS", "Deep stacks of basis expansions with "
+          "backcast/forecast residuals", "Univariate benchmarks, no covariates "
+          "needed"],
+         ["Temporal Fusion Transformer", "Attention over time plus gated "
+          "variable selection", "Many covariates, and you need interpretable "
+          "attention over them"],
+         ["PatchTST / Transformers", "Patch the series into tokens, apply a "
+          "Transformer", "Long horizons with abundant history"],
+         ["Foundation forecasters", "Pretrained across millions of series, used "
+          "zero-shot", "Cold-start series and rapid prototyping"]],
+        widths=[22, 44, 34], bold_first=True)
+    box("warn", "The honest state of the art",
+        "On standard long-horizon benchmarks, a well-tuned linear model on "
+        "lagged inputs matches or beats several published Transformer "
+        "forecasters, a result that survived careful replication. Deep "
+        "forecasting earns its keep with **many series, rich covariates, and "
+        "distributional output** - not with a single univariate series, where "
+        "ETS or gradient boosting on lag features is usually both better and "
+        "a hundred times cheaper.")
+
+    h2("Backtesting: the only evaluation that counts")
+    diagram([
+        "  |---------- train ----------|gap|-- test --|                fold 1",
+        "  |---------------- train ----------|gap|-- test --|          fold 2",
+        "  |---------------------- train ----------|gap|-- test --|    fold 3",
+        "",
+        "  expanding window (above) keeps all history;",
+        "  a rolling window drops the oldest data instead - use it when",
+        "  the process changes and old data actively misleads.",
+    ], "Rolling-origin evaluation. The gap must be at least the forecast "
+       "horizon, so no training row is closer to a test row than the horizon "
+       "you claim to predict.")
+    p("Rules that make a backtest believable: the test folds are contiguous and "
+      "in the future; every transformation is refitted inside each fold; the "
+      "horizon in the backtest equals the horizon in production; and the number "
+      "of folds is large enough that you are averaging over several regimes, "
+      "not one lucky quarter. Report the metric per fold, not only its mean - "
+      "the spread across folds is the number that predicts how the model will "
+      "behave next quarter.")
+
+    h2("Metrics, and the one that is quietly broken")
+    eq(["MAE   = mean |y - yhat|                       units of y, robust",
+        "RMSE  = sqrt( mean (y - yhat)^2 )             punishes large misses",
+        "MAPE  = mean |y - yhat| / |y| * 100           BREAKS when y ~ 0",
+        "sMAPE = mean 2|y - yhat| / (|y| + |yhat|)     asymmetric in practice",
+        "MASE  = MAE(model) / MAE(seasonal naive on the training set)",
+        "Pinball_q = mean [ q(y - yhat) if y >= yhat else (1-q)(yhat - y) ]"],
+       "MASE is the safe default: scale-free, defined at zero, and below 1 "
+       "exactly when you beat the naive baseline.")
+    box("math", "MASE computed",
+        "A daily series where the seasonal-naive (last week's same weekday) "
+        "forecast has MAE 12.0 on the training set. Your model scores MAE 9.6 "
+        "on the backtest. MASE = 9.6 / 12.0 = **0.80**: you are 20% better than "
+        "doing nothing clever. If MASE >= 1 - which happens more often than "
+        "anyone admits - the model is worse than a one-line baseline and should "
+        "not ship. **Always report the naive baseline next to the model.**")
+    p("For probabilistic forecasts, evaluate the interval, not just the point: "
+      "report pinball loss at the quantiles you actually use, and check "
+      "**coverage** - the fraction of actuals falling inside the 80% interval "
+      "should be 80%, not 55%. Inventory, staffing and capacity decisions all "
+      "consume a quantile, not a mean, so a model with a good mean and a "
+      "miscalibrated tail is the wrong model.")
+
+    h2("Hierarchies, intermittency and anomalies")
+    bul([
+        "**Hierarchical forecasting.** Store-level forecasts must sum to "
+        "region-level and national forecasts. Forecast every level "
+        "independently, then reconcile - MinT reconciliation is the standard "
+        "method and usually improves accuracy at every level, not only "
+        "consistency.",
+        "**Intermittent demand.** Series that are zero most days (spare parts) "
+        "break MAPE and mislead RMSE. Croston's method or a two-part model "
+        "(probability of a nonzero day x expected size) is the right shape.",
+        "**Anomaly detection.** Fit a forecast, then flag points whose residual "
+        "exceeds a robust threshold, for example a multiple of the median "
+        "absolute deviation. Seasonal-hybrid ESD is the classical choice. "
+        "Anomalies must then be replaced in the training window or the next "
+        "forecast will chase them.",
+        "**Change points.** A structural break - a pricing change, a pandemic, "
+        "a new competitor - is not an outlier to be smoothed. Detect it, and "
+        "either restrict the training window or add an indicator feature.",
+    ])
+
+    h3("Exercises")
+    bul([
+        "Take any daily series, plot the STL decomposition, and write one "
+        "sentence describing each of the three components.",
+        "Compute the AR(1) coefficient by hand on the five numbers in the box, "
+        "then confirm it with a library fit.",
+        "Build the supervised window table for h = 7, then deliberately remove "
+        "the shift(h) from one rolling feature and measure how much the "
+        "backtest score improves. That improvement is the size of the leak you "
+        "would have shipped.",
+        "Run a five-fold rolling-origin backtest of a seasonal-naive baseline "
+        "and a gradient-boosted model, and report MASE per fold for both.",
+        "Produce 10th, 50th and 90th percentile forecasts, measure empirical "
+        "coverage of the 80% interval, and calibrate it if it is off.",
+    ], ordered=True)
+
+    # --------------------------------------------------------------- Ch 40 ---
+    chapter("Recommender Systems")
+    p("Recommendation is the highest-revenue application of machine learning in "
+      "existence and the one whose textbook description least resembles its "
+      "practice. The differences: the label depends on what you showed, so the "
+      "data is generated by your own past model; the item catalogue is too "
+      "large to score exhaustively; and the offline metric agrees with the "
+      "online outcome only sometimes.")
+
+    h2("The industrial shape of the problem")
+    diagram([
+        "  millions of items",
+        "        |",
+        "  [ RETRIEVAL ]   cheap, recall-oriented, many sources in parallel",
+        "        |         (two-tower ANN, co-visitation, popularity, rules)",
+        "   ~ 500 candidates",
+        "        |",
+        "  [ RANKING ]     expensive model, rich features, one score per item",
+        "        |         (GBDT or deep ranker, tens of ms budget)",
+        "    ~ 50 ranked",
+        "        |",
+        "  [ RE-RANKING ]  diversity, freshness, business rules, dedup, ads",
+        "        |",
+        "     10 shown",
+    ], "The funnel. Each stage has a different objective and a different cost "
+       "budget; confusing them is the most common architectural mistake.")
+    tbl(["Stage", "Objective", "Latency budget", "Metric"],
+        [["Retrieval", "Do not lose the good items", "1-10 ms over millions",
+          "Recall@k"],
+         ["Ranking", "Order the survivors correctly", "10-50 ms over hundreds",
+          "NDCG, AUC, calibrated CTR"],
+         ["Re-ranking", "Make the list good as a __set__", "< 5 ms",
+          "Diversity, coverage, business KPIs"]],
+        widths=[16, 40, 22, 22], bold_first=True)
+
+    h2("Feedback data and what it really means")
+    tbl(["Signal", "Density", "Bias"],
+        [["Explicit ratings", "Very sparse (< 1% of pairs)",
+          "Only motivated users rate; J-shaped distribution"],
+         ["Clicks", "Dense", "Position bias, popularity bias, clickbait"],
+         ["Dwell time / completion", "Dense", "Better proxy for satisfaction; "
+          "content-length confound"],
+         ["Purchases / subscriptions", "Sparse but decisive", "Delayed, and "
+          "attribution is contested"],
+         ["Explicit negatives (hide, not interested)", "Very sparse",
+          "High precision, worth weighting heavily"]],
+        widths=[30, 26, 44], bold_first=True)
+    box("key", "Missing is not negative",
+        "A user did not click an item either because they disliked it or "
+        "because they never saw it. Treating all non-interactions as negatives "
+        "biases the model towards whatever your previous system happened to "
+        "show. The standard corrections are confidence weighting (implicit ALS), "
+        "sampled negatives drawn from the catalogue rather than from "
+        "impressions, and inverse-propensity weighting by the probability the "
+        "item was shown.")
+
+    h2("Neighbourhood collaborative filtering")
+    eq(["Item-item score:",
+        "  s(u, i) = SUM_(j in items rated by u) sim(i, j) r_uj",
+        "            -------------------------------------------",
+        "                     SUM_j |sim(i, j)|",
+        "Cosine similarity:  sim(i,j) = (r_i . r_j) / (||r_i|| ||r_j||)"],
+       "Item-item beats user-user in practice: item vectors are denser, more "
+       "stable over time, and precomputable.")
+    box("math", "Item-item on a tiny matrix",
+        "Three users, ratings on items A, B, C: u1 = (5, 4, ?), u2 = (4, 5, 2), "
+        "u3 = (1, 2, 5). Column A = (5,4,1), B = (4,5,2), C = (?,2,5) - use "
+        "(0,2,5) for the cosine over co-rated users only. sim(A,B) = "
+        "(20+20+2)/(sqrt(42) sqrt(45)) = 42/43.5 = **0.966**; sim(A,C) using "
+        "users 2 and 3 = (8+5)/(sqrt(17) sqrt(29)) = 13/22.2 = **0.586**. "
+        "Predicting C for u1 from their ratings of A and B: "
+        "(0.586(5) + sim(B,C)(4)) / (0.586 + sim(B,C)). Over users 2 and 3, "
+        "sim(B,C) = (10 + 10)/(sqrt(29) sqrt(29)) = 0.690, so the prediction is "
+        "(2.93 + 2.76)/1.276 = **4.46** - which is too high, and usefully so: u1 looks like u2, who rated C low. The fix is to centre "
+        "each user's ratings before computing similarities, which removes the "
+        "'this user rates everything highly' effect. **Mean-centring is not "
+        "optional in neighbourhood CF.**")
+
+    h2("Matrix factorization, the model that won Netflix")
+    eq(["rhat_ui = mu + b_u + b_i + p_u . q_i",
+        "min  SUM_(u,i in observed) (r_ui - rhat_ui)^2",
+        "     + lambda ( ||p_u||^2 + ||q_i||^2 + b_u^2 + b_i^2 )",
+        "SGD updates, with e_ui = r_ui - rhat_ui:",
+        "  b_u <- b_u + lr (e_ui - lambda b_u)",
+        "  p_u <- p_u + lr (e_ui q_i - lambda p_u)",
+        "  q_i <- q_i + lr (e_ui p_u - lambda q_i)"],
+       "The bias terms alone - global mean, user leniency, item popularity - "
+       "capture most of the achievable improvement over the global average. Fit "
+       "them before adding factors.")
+    box("math", "One SGD step, arithmetic included",
+        "mu = 3.5, b_u = 0.2, b_i = -0.3, p_u = (0.1, 0.4), q_i = (0.5, -0.2), "
+        "lr = 0.01, lambda = 0.05, true rating 5. Prediction = 3.5 + 0.2 - 0.3 "
+        "+ (0.05 - 0.08) = 3.37. Error e = 1.63. Then b_u becomes 0.2 + "
+        "0.01(1.63 - 0.05(0.2)) = **0.2162**; p_u becomes (0.1, 0.4) + "
+        "0.01(1.63(0.5, -0.2) - 0.05(0.1, 0.4)) = (0.1 + 0.00810, 0.4 - "
+        "0.00346) = **(0.1081, 0.3965)**. The first component of p_u moved "
+        "towards q_i because the item was under-predicted; the second moved "
+        "away because q_i's second component is negative. That is all matrix "
+        "factorization does, a hundred million times.")
+    p("For implicit feedback, the objective changes shape: every unobserved "
+      "pair enters the sum with low confidence rather than being ignored.")
+    eq(["Implicit ALS:  min SUM_(all u,i) c_ui ( pref_ui - p_u . q_i )^2 + reg",
+        "  pref_ui = 1 if any interaction else 0",
+        "  c_ui    = 1 + alpha * count_ui        (confidence grows with count)",
+        "BPR (pairwise): max SUM log sigmoid( p_u.q_i - p_u.q_j )",
+        "  i = an item the user interacted with, j = a sampled unseen item"],
+       "ALS is embarrassingly parallel and closed-form per user; BPR optimizes "
+       "ranking directly and is the better choice when you only care about the "
+       "order of the top few.")
+
+    h2("Neural retrieval and sequential models")
+    p("The **two-tower** model is the modern retrieval workhorse: one encoder "
+      "for the user context, one for the item, trained so that the dot product "
+      "of their embeddings predicts interaction. Because the item tower does "
+      "not see the user, all item embeddings can be precomputed and indexed; "
+      "retrieval becomes approximate nearest-neighbour search.")
+    code([
+        "# Two-tower training with in-batch negatives (sampled softmax)",
+        "u = user_tower(user_features)            # (B, d)",
+        "v = item_tower(item_features)            # (B, d), the positives",
+        "logits = u @ v.T / temperature           # (B, B); diagonal = positives",
+        "# correct for popularity: subtract log of sampling probability",
+        "logits = logits - torch.log(item_freq).unsqueeze(0)",
+        "loss = F.cross_entropy(logits, torch.arange(len(u), device=u.device))",
+    ], "Every other item in the batch serves as a negative, which is why large "
+       "batches matter here. The log-frequency correction is essential: without "
+       "it the model learns to retrieve popular items and nothing else.")
+    tbl(["Index", "Structure", "Trade-off"],
+        [["Flat / brute force", "Exact dot product over all items",
+          "Perfect recall; fine up to ~1M items with a GPU"],
+         ["IVF", "Cluster items, search a few clusters",
+          "Tunable via nprobe; needs training"],
+         ["HNSW", "Navigable small-world graph", "Best latency/recall; high "
+          "memory, slow to build"],
+         ["Product quantization", "Compress vectors to codes",
+          "8-32x memory saving; some recall loss - the same trade as Chapter 28"]],
+        widths=[22, 34, 44], bold_first=True)
+    p("**Sequential recommenders** treat a user's history as a sequence and "
+      "predict the next item: GRU4Rec used a recurrent net, SASRec a causal "
+      "Transformer, BERT4Rec a masked one. They are the strongest family when "
+      "order carries meaning - sessions, media consumption, learning paths - "
+      "and they connect this chapter directly to Chapters 22 to 24: the "
+      "architecture is identical, only the vocabulary is items instead of "
+      "tokens.")
+
+    h2("Ranking and its metrics")
+    p("The ranker sees hundreds of candidates and rich features: user history "
+      "aggregates, item statistics, context (time, device, position), and "
+      "cross features. Gradient-boosted trees with a ranking objective "
+      "(LambdaMART) remain extremely strong; deep rankers (Wide and Deep, DLRM, "
+      "DCN) win when there are many high-cardinality categorical features whose "
+      "interactions matter.")
+    eq(["Precision@k = (relevant items in top k) / k",
+        "Recall@k    = (relevant items in top k) / (all relevant items)",
+        "DCG@k       = SUM_(i=1..k)  rel_i / log2(i + 1)",
+        "NDCG@k      = DCG@k / IDCG@k     (IDCG = DCG of the perfect ordering)",
+        "MRR         = mean of 1 / (rank of the first relevant item)"])
+    box("math", "NDCG@3 by hand",
+        "Relevances of the three items you showed, in the order you showed "
+        "them: 1, 0, 2. DCG = 1/log2(2) + 0/log2(3) + 2/log2(4) = 1/1 + 0 + "
+        "2/2 = **2.00**. The ideal ordering is 2, 1, 0, giving IDCG = "
+        "2/1 + 1/1.585 + 0 = 2 + 0.631 = **2.631**. NDCG@3 = 2.00/2.631 = "
+        "**0.760**. Now swap your first two items to get 0, 1, 2: DCG = 0 + "
+        "1/1.585 + 1 = 1.631 and NDCG falls to 0.620. **The logarithmic "
+        "discount is what makes the metric care about the top of the list** - "
+        "moving a relevant item from position 2 to position 1 is worth far more "
+        "than moving one from position 9 to position 8, which is exactly how "
+        "users behave.")
+    box("warn", "Offline metrics disagree with online outcomes",
+        "An offline NDCG improvement can lose an A/B test, routinely. The three "
+        "reasons: your offline data only contains items the old system showed, "
+        "so a genuinely better retrieval looks worse; position bias inflates "
+        "whatever the old ranker put on top; and the online objective (long-term "
+        "retention) is not the offline label (this session's click). Treat "
+        "offline metrics as a filter that decides what is worth testing, never "
+        "as the decision itself.")
+
+    h2("The problems that only recommenders have")
+    tbl(["Problem", "What happens", "Standard treatment"],
+        [["Cold start (item)", "New items have no interactions and are never "
+          "shown", "Content features in the item tower; explicit exploration "
+          "budget"],
+         ["Cold start (user)", "No history to personalize on",
+          "Popularity by segment, onboarding preferences, contextual bandits"],
+         ["Position bias", "Top slots get clicks regardless of relevance",
+          "Inverse-propensity weighting; randomized-slot data collection"],
+         ["Popularity bias", "The rich get richer; the tail dies",
+          "Frequency-corrected sampling, exposure-aware objectives"],
+         ["Feedback loop", "Model trains on its own recommendations and "
+          "narrows", "Logged exploration data, off-policy correction, "
+          "diversity constraints"],
+         ["Filter bubble / harms", "Users are pushed towards ever narrower or "
+          "more extreme content", "Diversity and novelty objectives, "
+          "content-quality classifiers, explicit ranking policy"]],
+        widths=[20, 40, 40], bold_first=True)
+    p("Off-policy evaluation gives a partial answer to 'how would the new "
+      "ranker have done?' using logged data, by importance-weighting each "
+      "logged interaction by the ratio of new-policy to logging-policy "
+      "probability. Inverse propensity scoring is unbiased but high-variance; "
+      "clipped and doubly-robust estimators trade a little bias for a lot of "
+      "variance. All of them require that the logging policy was **stochastic** "
+      "and that its probabilities were logged - a decision you must make before "
+      "you need it, not after.")
+    box("tip", "The one-week recommender",
+        "Day 1: popularity baseline by segment, measured. Day 2: item-item "
+        "co-visitation from the last 30 days - typically beats popularity by a "
+        "wide margin and costs nothing. Day 3-4: implicit ALS or a two-tower "
+        "model for retrieval. Day 5: a GBDT ranker over the candidates with "
+        "twenty features. Day 6: diversity and dedup rules. Day 7: A/B test "
+        "with a holdout that never receives personalization, so you can measure "
+        "the value of the whole system for as long as it runs.")
+
+    h3("Exercises")
+    bul([
+        "Compute NDCG@5 for two orderings of the same five items by hand, then "
+        "verify with a library.",
+        "Build the item-item co-visitation baseline on any interaction log and "
+        "measure Recall@20 against a time-based holdout.",
+        "Implement the matrix-factorization SGD update and reproduce the "
+        "arithmetic in the worked box exactly.",
+        "Train a two-tower model with and without the log-frequency correction "
+        "and compare the popularity distribution of what each retrieves.",
+        "Take a logged ranking dataset, estimate position bias by comparing "
+        "click rates of the same item in different slots, and re-weight your "
+        "training data accordingly.",
+    ], ordered=True)
+
+    # --------------------------------------------------------------- Ch 41 ---
+    chapter("Computer Vision Beyond Classification")
+    p("Chapter 21 stopped at 'which class is this image?'. Almost no real vision "
+      "product stops there. This chapter covers what the other tasks are, the "
+      "geometry and matching machinery they need, the metrics that are easy to "
+      "misreport, and the deployment details that decide whether a detector "
+      "runs at 5 or 50 frames per second.")
+
+    h2("The task taxonomy")
+    tbl(["Task", "Output per image", "Typical metric"],
+        [["Classification", "One label (or a multi-label vector)",
+          "Accuracy, mAP for multi-label"],
+         ["Object detection", "A set of boxes with classes and scores",
+          "mAP@[.50:.95]"],
+         ["Semantic segmentation", "A class for every pixel", "mIoU"],
+         ["Instance segmentation", "A mask per object instance",
+          "Mask AP"],
+         ["Panoptic segmentation", "Instances for things, regions for stuff",
+          "Panoptic Quality"],
+         ["Keypoints / pose", "Ordered landmark coordinates", "OKS-based AP"],
+         ["Depth / normals", "A continuous value per pixel",
+          "Abs-rel error, delta < 1.25"],
+         ["Multi-object tracking", "Boxes plus consistent identities over time",
+          "MOTA, IDF1, HOTA"]],
+        widths=[24, 44, 32], bold_first=True)
+    box("key", "The structural difference from classification",
+        "The output is a **set of variable size**, not a fixed vector. That "
+        "single fact forces everything that follows: a matching step between "
+        "predictions and ground truth, a rule for suppressing duplicates, and a "
+        "metric that must integrate over both confidence and overlap thresholds.")
+
+    h2("IoU, the quantity everything is built on")
+    eq(["IoU(A, B) = area(A INTERSECT B) / area(A UNION B)",
+        "          = I / (area(A) + area(B) - I)"])
+    box("math", "IoU computed on two boxes",
+        "Prediction (x1,y1,x2,y2) = (10, 10, 50, 50), ground truth = "
+        "(30, 20, 70, 60). The intersection spans x from max(10,30) = 30 to "
+        "min(50,70) = 50 and y from max(10,20) = 20 to min(50,60) = 50, so it "
+        "is 20 x 30 = **600**. The areas are 40 x 40 = 1600 each, so the union "
+        "is 1600 + 1600 - 600 = **2600** and IoU = 600/2600 = **0.231**. That "
+        "box would count as a false positive at the standard 0.5 threshold "
+        "despite overlapping substantially - which is why 'the model found the "
+        "object' and 'the model scored a true positive' are different claims.")
+    p("Non-maximum suppression turns a dense score map into a set: sort boxes by "
+      "score, keep the top one, delete every remaining box whose IoU with it "
+      "exceeds a threshold, repeat. Its two failure modes are worth knowing: "
+      "crowded scenes lose genuine overlapping objects (soft-NMS decays scores "
+      "instead of deleting), and NMS is often the latency bottleneck on device "
+      "because it is sequential and data-dependent.")
+
+    h2("Detector families")
+    tbl(["Family", "Representative", "Mechanism", "Trade-off"],
+        [["Two-stage", "Faster R-CNN", "A region proposal network proposes, a "
+          "head classifies and refines with RoIAlign", "Most accurate per "
+          "FLOP historically; slower and more complex"],
+         ["One-stage anchored", "RetinaNet, SSD, YOLOv3", "Dense predictions "
+          "over predefined anchor boxes", "Fast; needs focal loss or hard "
+          "negative mining for the 1000:1 background imbalance"],
+         ["Anchor-free", "FCOS, CenterNet", "Predict object centres and "
+          "distances to box sides", "No anchor hyperparameters to tune; "
+          "simpler heads"],
+         ["Set prediction", "DETR, DINO", "Transformer decoder with Hungarian "
+          "matching to ground truth", "No NMS and no anchors; slow to converge "
+          "originally, largely fixed by later variants"],
+         ["Modern real-time", "YOLOv8-class, RT-DETR", "Anchor-free heads, "
+          "heavy augmentation, distillation", "The practical default for "
+          "deployment today"]],
+        widths=[16, 18, 36, 30], bold_first=True)
+    eq(["Focal loss   FL(p_t) = -alpha_t (1 - p_t)^gamma log(p_t)",
+        "  gamma = 2 typical: an easy background example with p_t = 0.99",
+        "  is down-weighted by (0.01)^2 = 1e-4 relative to plain cross-entropy"],
+       "The whole idea: with 100,000 anchors and 5 objects, the sum of many "
+       "tiny easy-negative losses drowns out the few that matter.")
+    p("Hungarian matching in DETR replaces both anchors and NMS: predictions "
+      "and ground-truth objects are matched one-to-one by minimizing a cost "
+      "combining class probability and box distance, so duplicates are "
+      "penalized by construction rather than removed afterwards. It is the "
+      "clearest example in vision of replacing a hand-designed post-processing "
+      "step with a learned, end-to-end one.")
+
+    h2("Segmentation")
+    diagram([
+        "  U-Net: contracting path + expanding path with skip connections",
+        "",
+        "  input --> [conv] --> [conv] --> [conv] ---bottleneck---",
+        "              |          |          |                    |",
+        "              |skip      |skip      |skip                |",
+        "              v          v          v                    v",
+        "  output <-- [up] <---- [up] <---- [up] <----------------",
+        "",
+        "  The skips carry high-resolution detail that pooling destroyed;",
+        "  without them the mask boundaries are blurred beyond usefulness.",
+    ], "U-Net remains the default for medical and scientific segmentation with "
+       "small datasets, fifteen years of newer architectures notwithstanding.")
+    bul([
+        "**FCN** replaced the classifier head with 1x1 convolutions and "
+        "upsampling - the idea that started the field.",
+        "**U-Net** added symmetric skip connections; it is data-efficient and "
+        "trains on a few hundred annotated images.",
+        "**DeepLab** used atrous (dilated) convolutions and ASPP to enlarge the "
+        "receptive field without losing resolution.",
+        "**Mask R-CNN** added a mask head to Faster R-CNN, making instance "
+        "segmentation a small increment over detection.",
+        "**Transformer-based** (SegFormer, Mask2Former) unified semantic, "
+        "instance and panoptic segmentation as mask classification.",
+        "**Promptable segmentation** (SAM-style) produces masks from a point or "
+        "box prompt with no task-specific training, which turns annotation from "
+        "hours of polygon drawing into seconds of clicking.",
+    ])
+    eq(["mIoU  = mean over classes of  TP / (TP + FP + FN)   at pixel level",
+        "Dice  = 2 TP / (2 TP + FP + FN)      (= F1 on pixels)",
+        "PQ    = (SUM_matched IoU) / (TP + 0.5 FP + 0.5 FN)"],
+       "Dice and IoU are monotonically related but Dice is more forgiving on "
+       "small objects, which is why medical papers quote it. Report both if "
+       "your classes are very imbalanced in area.")
+
+    h2("Mean average precision, computed honestly")
+    p("AP is the area under the precision-recall curve for one class at one IoU "
+      "threshold; mAP averages over classes, and COCO-style mAP averages "
+      "further over IoU thresholds from 0.50 to 0.95 in steps of 0.05. That "
+      "second average is why COCO mAP numbers look low: a detector with "
+      "human-level box placement still loses points at IoU 0.95.")
+    box("math", "AP from five detections",
+        "One class, 3 ground-truth objects. Sorted by confidence, the "
+        "detections are TP, FP, TP, TP, FP. Cumulative precision and recall "
+        "after each: (1/1, 1/3) = (1.000, 0.333); (1/2, 1/3) = (0.500, 0.333); "
+        "(2/3, 2/3) = (0.667, 0.667); (3/4, 3/3) = (0.750, 1.000); "
+        "(3/5, 1.000) = (0.600, 1.000). Interpolated precision (the maximum "
+        "precision at or beyond each recall level) is 1.000 at recall 1/3 and "
+        "0.750 at recalls 2/3 and 1. The area, summing precision times the "
+        "recall increments, is (1/3)(1.000) + (1/3)(0.750) + (1/3)(0.750) = "
+        "**0.833**. Note the fourth detection - a low-confidence true positive "
+        "- __raised__ AP even though it lowered precision at the top of the "
+        "list, because recall matters as much as precision in this metric.")
+    box("warn", "Three ways mAP gets misreported",
+        "Quoting mAP@0.5 and comparing it against someone else's mAP@[.5:.95] "
+        "(the first is typically 15-25 points higher); evaluating at a "
+        "confidence threshold rather than over the whole curve; and reporting "
+        "on a test set whose images share scenes with the training set, which "
+        "is endemic in datasets scraped from video.")
+
+    h2("Video, tracking and 3D")
+    bul([
+        "**Tracking-by-detection** is the dominant pipeline: run a detector "
+        "per frame, then associate boxes across frames. SORT uses a Kalman "
+        "filter for motion plus Hungarian matching on IoU; DeepSORT adds an "
+        "appearance embedding so identities survive occlusion. The metric "
+        "family (MOTA, IDF1, HOTA) separates detection quality from "
+        "association quality - report HOTA if you can, since MOTA is dominated "
+        "by detection errors.",
+        "**Video understanding** needs temporal modelling: 3D convolutions "
+        "(C3D, I3D), two-stream networks (appearance plus optical flow), and "
+        "now video Transformers with spatio-temporal attention. Cost is the "
+        "binding constraint - a 16-frame clip is 16x the pixels.",
+        "**Depth and 3D**: monocular depth estimation is now a strong "
+        "zero-shot capability; point-cloud networks (PointNet, sparse convs) "
+        "handle lidar; and neural rendering (NeRF, Gaussian splatting) "
+        "reconstructs a scene from posed images. These are separate "
+        "sub-fields, but they share this book's core machinery entirely.",
+    ])
+
+    h2("Training and deploying detectors in practice")
+    tbl(["Concern", "What to do"],
+        [["Small objects dominate the errors",
+          "Higher input resolution beats a bigger backbone; use feature "
+          "pyramids; tile large images at inference"],
+         ["Heavy augmentation is the norm",
+          "Mosaic, scale jitter, random crop, colour jitter - and turn mosaic "
+          "off for the last few epochs, which reliably gains a point"],
+         ["Class imbalance across the catalogue",
+          "Repeat-factor sampling for rare classes; do not simply oversample "
+          "images"],
+         ["Annotation quality dominates everything",
+          "Measure inter-annotator IoU before blaming the model; a 0.8 "
+          "agreement ceiling caps your mAP"],
+         ["Latency on device",
+          "Fuse conv-bn, use INT8 (Chapter 28), reduce input resolution first, "
+          "and profile NMS separately - it is often 30% of the budget"],
+         ["Preprocessing mismatch",
+          "Letterboxing, channel order and normalization constants must be "
+          "byte-identical between training and the deployed runtime; this is "
+          "the most common cause of 'it was fine in Python'"]],
+        widths=[32, 68], bold_first=True)
+
+    h3("Exercises")
+    bul([
+        "Compute IoU by hand for three pairs of boxes, including one with no "
+        "overlap, then implement it and check.",
+        "Implement NMS in twenty lines and run it on a synthetic set of "
+        "overlapping boxes at three IoU thresholds. Describe what changes.",
+        "Reproduce the AP calculation in the worked box, then recompute it "
+        "with the last two detections swapped.",
+        "Fine-tune a small pretrained detector on 200 annotated images and "
+        "report mAP@0.5 and mAP@[.5:.95] side by side.",
+        "Measure your detector's end-to-end latency split into preprocessing, "
+        "backbone, head and NMS. Optimize the largest term first.",
+    ], ordered=True)
+
+    # --------------------------------------------------------------- Ch 42 ---
+    chapter("Natural Language Processing: From Counting Words to Retrieval")
+    p("Chapter 24 covered large language models. This chapter covers everything "
+      "that comes before and around them - representations that still win on "
+      "small data, the tasks with their own structure, retrieval systems that "
+      "give a model access to your documents, and the evaluation problem that "
+      "makes language harder to measure than vision.")
+
+    h2("The classical pipeline, and why it still matters")
+    bul([
+        "**Normalization**: case folding, Unicode NFKC, stripping or keeping "
+        "accents and emoji. Every choice is a modelling decision; document it.",
+        "**Tokenization**: whitespace and rules for classical models; subword "
+        "(BPE, WordPiece, Unigram) for neural ones. Languages without spaces "
+        "(Chinese, Japanese, Thai) need segmentation, and morphologically rich "
+        "languages (Finnish, Turkish, Arabic) suffer most from a "
+        "poorly-fitted vocabulary.",
+        "**Stemming and lemmatization**: crude versus linguistic reduction to a "
+        "base form. Useful for search and for bag-of-words models; harmful "
+        "before a pretrained model, whose tokenizer expects raw text.",
+        "**Stop words**: removing them helps TF-IDF retrieval and hurts "
+        "anything that needs syntax. 'To be or not to be' is entirely stop "
+        "words.",
+    ])
+    box("tip", "A baseline that embarrasses expensive models",
+        "TF-IDF features plus linear logistic regression, on a few thousand "
+        "labelled documents, trains in one second and frequently lands within a "
+        "couple of points of a fine-tuned Transformer on topic classification. "
+        "Run it first, always. If a large model cannot beat it by a margin that "
+        "justifies its serving cost, it should not ship.")
+
+    h2("Counting: TF-IDF and BM25")
+    eq(["tf(t,d)    = count of term t in document d  (or 1 + log count)",
+        "idf(t)     = log( N / df(t) )        or log( (N + 1)/(df(t) + 1) ) + 1",
+        "tfidf(t,d) = tf(t,d) * idf(t),  then L2-normalize each document vector"])
+    box("math", "TF-IDF on four documents",
+        "N = 4 documents. The word 'the' appears in all four, so idf = "
+        "log(4/4) = **0** - it contributes nothing, which is why stop-word "
+        "removal is optional once you use IDF. The word 'quantization' appears "
+        "in one, so idf = log(4/1) = **1.386**. In a document where "
+        "'quantization' occurs 3 times and 'the' 12 times, the raw TF-IDF "
+        "weights are 3 x 1.386 = 4.16 and 12 x 0 = 0. **Rarity, not frequency, "
+        "is what carries information** - the single most transferable idea in "
+        "information retrieval.")
+    p("BM25 is TF-IDF's better-behaved successor and remains the strongest "
+      "sparse retriever: it saturates term frequency (the tenth occurrence adds "
+      "almost nothing) and normalizes by document length. In modern retrieval "
+      "stacks BM25 is not a baseline to be replaced but a component to be "
+      "combined - hybrid BM25-plus-dense retrieval beats either alone on almost "
+      "every benchmark, because sparse matching catches exact names, codes and "
+      "rare terms that embeddings blur.")
+
+    h2("Word embeddings: dense meaning from co-occurrence")
+    p("Word2vec's skip-gram model predicts context words from a centre word. "
+      "The full softmax over a 100,000-word vocabulary is too expensive, so "
+      "negative sampling replaces it with a set of binary decisions:")
+    eq(["Skip-gram with negative sampling, for centre c and context o:",
+        "  L = -log sigmoid( v_o . u_c )",
+        "      - SUM_(k=1..K) log sigmoid( -v_k . u_c )    k sampled from P_n",
+        "  P_n(w) proportional to freq(w)^0.75    (the 3/4 power matters:",
+        "         it samples rare words more often than frequency alone)"],
+       "Gradients: d L / d u_c = (sigmoid(v_o.u_c) - 1) v_o + SUM_k "
+       "sigmoid(v_k.u_c) v_k. Two vectors per word - as centre and as context - "
+       "and it is standard to keep or average them.")
+    tbl(["Method", "What it optimizes", "Notable property"],
+        [["word2vec (SGNS)", "Local context prediction",
+          "Fast; famous analogy arithmetic king - man + woman ~ queen"],
+         ["GloVe", "Weighted least squares on log co-occurrence counts",
+          "Uses global statistics directly; similar quality"],
+         ["FastText", "Skip-gram over character n-grams",
+          "Handles out-of-vocabulary and rich morphology; the right default "
+          "for non-English"],
+         ["Contextual (BERT-style)", "Masked language modelling",
+          "One vector per __occurrence__, so 'bank' differs by sentence"]],
+        widths=[22, 38, 40], bold_first=True)
+    box("warn", "Two things static embeddings get wrong",
+        "They give one vector per word, so every sense of a polysemous word is "
+        "averaged into a single point - 'bank' sits between rivers and finance "
+        "and is a good representation of neither. And they encode the social "
+        "biases of the corpus in a directly measurable way: occupation words "
+        "align with gender directions, and models built on them inherit that "
+        "alignment. Both are reasons the field moved to contextual "
+        "representations, and the second does not disappear there.")
+
+    h2("Tasks with structure")
+    tbl(["Task", "Shape", "Standard approach"],
+        [["Text classification", "Document -> label",
+          "TF-IDF + linear, or fine-tuned encoder"],
+         ["Sequence labelling (NER, POS)", "Token -> tag, with BIO encoding",
+          "Encoder + per-token head, optionally a CRF layer"],
+         ["Span extraction (QA)", "Text -> (start, end)",
+          "Two heads predicting start and end positions"],
+         ["Sentence pair (NLI, dedup)", "Two texts -> relation",
+          "Cross-encoder for accuracy, bi-encoder for speed"],
+         ["Generation (summarize, translate)", "Text -> text",
+          "Encoder-decoder or decoder-only LLM"],
+         ["Retrieval", "Query -> ranked documents",
+          "Hybrid BM25 + dense bi-encoder, then a cross-encoder reranker"]],
+        widths=[26, 30, 44], bold_first=True)
+    p("BIO tagging is worth a line because it is where subtle bugs live: B-PER "
+      "marks the beginning of a person entity, I-PER its continuation, O "
+      "everything else. Entity-level F1 - not token accuracy - is the metric, "
+      "because getting 4 of 5 tokens of a name right is not getting the name "
+      "right. A CRF layer on top enforces valid transitions (an I- tag cannot "
+      "follow O), which is worth one to three F1 points and costs almost "
+      "nothing.")
+
+    h2("Retrieval-augmented generation, done properly")
+    diagram([
+        "  query --> [rewrite] --> [BM25 search]  ---.",
+        "                     \\-> [dense search] ---+--> [fuse/RRF] --> top 50",
+        "                                                         |",
+        "                                          [cross-encoder rerank] -> top 5",
+        "                                                         |",
+        "                              [prompt: question + passages] --> LLM",
+        "                                                         |",
+        "                                        answer + citations to passages",
+    ], "The retrieval half of RAG is a search engineering problem, and it is "
+       "where nearly all quality comes from. The generator can only be as good "
+       "as the passages it is handed.")
+    tbl(["Decision", "Guidance"],
+        [["Chunk size", "200-500 tokens with 10-20% overlap; split on "
+          "structure (headings, paragraphs) rather than fixed windows"],
+         ["What to embed", "The chunk plus its document title and section "
+          "path; a bare chunk loses the context that makes it findable"],
+         ["Hybrid or dense only", "Hybrid, almost always. Dense retrieval "
+          "misses exact identifiers, part numbers and rare names"],
+         ["Reranking", "A cross-encoder over the top 50 is the highest "
+          "value-per-millisecond component in the whole stack"],
+         ["Evaluation", "Measure retrieval separately: Recall@k and MRR on "
+          "questions with known answer passages, before judging the answers"],
+         ["Grounding", "Require citations and check that cited passages "
+          "actually contain the claim; unfaithful summaries of correct "
+          "passages are the dominant failure"]],
+        widths=[24, 76], bold_first=True)
+
+    h2("Evaluating language output")
+    tbl(["Metric", "Measures", "Weakness"],
+        [["BLEU", "n-gram precision against references, with brevity penalty",
+          "Insensitive to meaning; punishes valid paraphrase"],
+         ["ROUGE-L", "Longest common subsequence recall",
+          "Rewards copying; standard for summarization anyway"],
+         ["chrF", "Character n-gram F-score",
+          "Better for morphologically rich languages"],
+         ["BERTScore", "Similarity of contextual embeddings",
+          "Correlates better with humans; depends on the scoring model"],
+         ["Exact match / F1 (QA)", "String overlap with the gold answer",
+          "Brittle to formatting; use with normalization"],
+         ["LLM-as-judge", "A model scores outputs against a rubric",
+          "Position bias, verbosity bias, self-preference; needs paired "
+          "randomized comparisons and a human-labelled calibration set"]],
+        widths=[20, 42, 38], bold_first=True)
+    box("warn", "The evaluation trap that costs the most time",
+        "Benchmark contamination. If the test set existed on the public web "
+        "before the model was pretrained, a high score measures memorization. "
+        "For any claim that matters, build a small private evaluation set from "
+        "your own data, keep it out of every prompt and log, and treat public "
+        "leaderboard numbers as advertising.")
+
+    h3("Exercises")
+    bul([
+        "Compute TF-IDF vectors by hand for four short documents and verify "
+        "that a term appearing everywhere gets weight zero.",
+        "Train word2vec on any corpus of a few million words and inspect the "
+        "ten nearest neighbours of five words, including one ambiguous one.",
+        "Build a TF-IDF plus logistic-regression baseline and a fine-tuned "
+        "encoder for the same classification task; report accuracy, training "
+        "time and inference cost for both.",
+        "Build a minimal RAG pipeline over 500 of your own documents, then "
+        "measure Recall@10 of the retriever alone on 30 hand-written questions.",
+        "Take 50 generated summaries, score them with ROUGE and with an "
+        "LLM judge, and compute the correlation of each with your own manual "
+        "ratings.",
+    ], ordered=True)
+
+    # --------------------------------------------------------------- Ch 43 ---
+    chapter("Speech, Audio and Multimodal Models")
+    p("Audio is the modality where classical signal processing and deep learning "
+      "meet most directly: the front end is a hundred years of Fourier analysis, "
+      "and everything after it is a neural network. Multimodal models then join "
+      "audio, vision and text in a shared space, which is the mechanism behind "
+      "zero-shot classification, cross-modal search, and the vision-language "
+      "assistants now built on top of Chapter 24's LLMs.")
+
+    h2("From waveform to features")
+    eq(["Sample rate     16 kHz for speech, 44.1/48 kHz for music",
+        "Frame           25 ms window, 10 ms hop  ->  100 frames per second",
+        "STFT            X(f, t) = FFT( window * frame_t )",
+        "Power spectrum  |X(f,t)|^2",
+        "Mel filterbank  80 triangular filters spaced by mel(f) = 2595 log10(1 + f/700)",
+        "Log-mel         log( mel_energies + eps )      <- the modern default",
+        "MFCC            DCT( log-mel ), keep 13 coefficients   <- classical"],
+       "A 1-second clip at 16 kHz is 16,000 numbers; its log-mel spectrogram is "
+       "100 x 80 = 8,000 - and a far easier learning problem, because the "
+       "network no longer has to discover the Fourier transform.")
+    p("The mel scale exists because human pitch perception is roughly "
+      "logarithmic: the difference between 200 and 300 Hz is obvious, between "
+      "5,000 and 5,100 Hz inaudible. MFCCs additionally decorrelate the "
+      "filterbank outputs with a DCT, which mattered when models were Gaussian "
+      "mixtures and matters little for convolutional or Transformer front ends "
+      "- **use log-mel for neural models, MFCC only for classical pipelines or "
+      "very tight compute budgets**.")
+    tbl(["Augmentation", "What it simulates", "Note"],
+        [["Additive noise at a target SNR", "Real environments",
+          "Use a noise corpus, not white noise"],
+         ["Room impulse response convolution", "Reverberation",
+          "The single most valuable augmentation for far-field audio"],
+         ["Speed / tempo perturbation (0.9x, 1.1x)", "Speaker rate variation",
+          "Cheap and reliably helpful for ASR"],
+         ["SpecAugment: time and frequency masking", "Occlusion in the "
+          "spectrogram", "Applied to the features, not the audio; near-free "
+          "and very effective"],
+         ["Gain, clipping, codec round-trip", "Device and transport",
+          "Match the codecs your product actually uses"]],
+        widths=[30, 30, 40], bold_first=True)
+
+    h2("Recognition: CTC, attention and transducers")
+    p("Speech recognition has a structural problem: the input has 100 frames per "
+      "second, the output has perhaps 3 characters per second, and no alignment "
+      "between them is given. The three solutions define the field.")
+    eq(["CTC: add a blank symbol, sum over all alignments that collapse",
+        "     to the target after removing blanks and repeats.",
+        "  p(y | x) = SUM over valid alignments a of PROD_t p(a_t | x)",
+        "  computed by the same forward algorithm as an HMM (Chapter 37)",
+        "  Assumption: outputs are conditionally independent given x."],
+       "For target 'CAT' over 5 frames, valid alignments include C-A-T-_-_, "
+       "CC-A-T-_, C-_-A-T-T and dozens more; CTC sums their probabilities with "
+       "dynamic programming instead of enumerating them.")
+    tbl(["Approach", "Streaming", "Strength", "Weakness"],
+        [["CTC", "Yes, naturally", "Simple, fast, monotonic by construction",
+          "No output-to-output dependency; needs an external language model"],
+         ["Attention encoder-decoder", "No (needs the full utterance)",
+          "Best accuracy offline; implicit language model",
+          "Can hallucinate or loop; not monotonic"],
+         ["RNN-Transducer (RNN-T)", "Yes", "Streaming plus an internal "
+          "prediction network - the standard for on-device assistants",
+          "More complex loss, heavier training"],
+         ["Whisper-style encoder-decoder", "No (30 s windows)",
+          "Multilingual, robust, trained weakly-supervised at scale",
+          "Latency and hallucination on silence"]],
+        widths=[22, 14, 34, 30], bold_first=True)
+    box("math", "Word error rate, computed",
+        "WER = (substitutions + insertions + deletions) / words in the "
+        "reference, computed by Levenshtein alignment. Reference: 'the quick "
+        "brown fox jumps' (5 words). Hypothesis: 'the quick brown box jump "
+        "over' - one substitution (fox -> box), one substitution (jumps -> "
+        "jump), one insertion (over). WER = 3/5 = **0.60**, or 60%. Note that "
+        "WER can exceed 100% because of insertions, and that it weights a "
+        "function word the same as the one content word your product actually "
+        "needed - which is why keyword-spotting products report **false accepts "
+        "per hour** and **false rejects at a fixed threshold** instead.")
+    p("Decoding matters as much as the acoustic model. Greedy CTC decoding is "
+      "the floor; beam search with an n-gram or neural language model typically "
+      "removes 15-30% of the remaining errors on domain text, because the "
+      "acoustic model has no idea that your product's proper nouns exist. "
+      "Shallow fusion - adding lambda times the language-model log-probability "
+      "to the beam score - is the standard mechanism, and a per-user contextual "
+      "biasing list is how contact names get recognized.")
+
+    h2("Speaking, separating and self-supervising")
+    bul([
+        "**Text to speech** is now two stages: an acoustic model (Tacotron, "
+        "FastSpeech) turning text into a mel spectrogram, and a neural vocoder "
+        "(HiFi-GAN, WaveRNN) turning that into a waveform. Non-autoregressive "
+        "acoustic models with explicit duration prediction are the deployment "
+        "default because they are fast and cannot loop.",
+        "**Neural audio codecs** (SoundStream, EnCodec) compress audio to "
+        "discrete tokens, which lets a language model generate speech and music "
+        "with exactly the machinery of Chapter 24. This is the architecture "
+        "behind current speech-to-speech systems.",
+        "**Speaker tasks**: an embedding network (x-vector, ECAPA) trained with "
+        "a margin softmax gives a vector per utterance; verification is a "
+        "cosine threshold, and diarization is clustering those embeddings over "
+        "time.",
+        "**Self-supervised pretraining** (wav2vec 2.0, HuBERT, WavLM) is the "
+        "reason low-resource ASR became feasible: pretrain on tens of thousands "
+        "of unlabelled hours, fine-tune on ten labelled hours, and beat a "
+        "system trained on a thousand labelled hours the old way.",
+        "**Enhancement and separation** (speech denoising, source separation) "
+        "operate on masks over the spectrogram or directly on the waveform, and "
+        "are usually a preprocessing stage whose benefit must be measured "
+        "end-to-end - a denoiser that improves human listening can hurt an ASR "
+        "model that was trained on noisy audio.",
+    ])
+    box("tip", "On-device keyword spotting, the canonical tiny-ML task",
+        "A wake-word model runs continuously on a battery: budgets are tens of "
+        "kilobytes of weights and single-digit milliwatts. The recipe is a small "
+        "depthwise-separable CNN or tiny Transformer over log-mel features, "
+        "INT8 quantized (Chapter 28), pruned (Chapter 29), and cascaded - a "
+        "1-kilobyte always-on stage gates a larger verifier. This is where "
+        "Chapters 28 to 31 stop being theory.")
+
+    h2("Multimodal models: one space for two modalities")
+    eq(["CLIP-style contrastive objective (InfoNCE), batch of N pairs:",
+        "  s_ij = cos( image_emb_i , text_emb_j ) / temperature",
+        "  L = 0.5 * [ CE(rows of s, diagonal) + CE(columns of s, diagonal) ]",
+        "The matched pair is the positive; the other N-1 texts (and images)",
+        "in the batch are the negatives."],
+       "Large batches are not an optimization detail here - they are the source "
+       "of the negatives, which is why CLIP-class models are trained with "
+       "batches in the tens of thousands.")
+    p("Once image and text live in one space, zero-shot classification is "
+      "retrieval: embed the candidate class names as sentences ('a photo of a "
+      "{class}'), embed the image, take the nearest. Cross-modal search, "
+      "duplicate detection and content moderation all become nearest-neighbour "
+      "queries in the same index (Chapter 39's machinery, unchanged).")
+    diagram([
+        "  Vision-language model (LLaVA-style):",
+        "",
+        "   image --> [frozen vision encoder] --> patch embeddings",
+        "                                              |",
+        "                                    [projector: MLP or resampler]",
+        "                                              |",
+        "   text  --> [tokenizer] --> token embeddings + projected image tokens",
+        "                                              |",
+        "                                     [ pretrained LLM decoder ]",
+        "                                              |",
+        "                                           answer",
+    ], "The projector is the only part trained in stage one; the LLM is then "
+       "fine-tuned on instruction data in stage two. The image becomes, quite "
+       "literally, a few hundred extra tokens in the context.")
+    tbl(["Family", "Example capability", "Main failure mode"],
+        [["Contrastive dual encoder", "Zero-shot classification, retrieval",
+          "No compositional reasoning: 'dog left of cat' matches 'cat left of "
+          "dog'"],
+         ["Vision-language decoder", "Describe, answer, read charts and "
+          "documents", "Object hallucination - naming objects that are not "
+          "present"],
+         ["Audio-language", "Speech instruction following, audio captioning",
+          "Degrades under noise far faster than a dedicated ASR model"],
+         ["Any-to-any", "Text, image, audio in and out",
+          "Uneven quality across modalities; evaluation is largely unsolved"]],
+        widths=[24, 38, 38], bold_first=True)
+    box("warn", "Evaluating multimodal systems",
+        "Captioning metrics (CIDEr, SPICE) and VQA accuracy reward safe, "
+        "generic answers. Hallucination needs its own measurement: ask about "
+        "objects that are absent (POPE-style probing) and report the false "
+        "positive rate. And check the training data question - many public "
+        "benchmarks appear in the pretraining corpora of the models being "
+        "scored on them.")
+
+    h3("Exercises")
+    bul([
+        "Compute the number of frames, and the log-mel feature-tensor shape, "
+        "for a 3-second clip at 16 kHz with 25 ms windows and 10 ms hops.",
+        "Implement WER with a Levenshtein alignment and reproduce the 0.60 in "
+        "the worked box.",
+        "Enumerate every valid CTC alignment of the target 'AB' over 4 frames "
+        "and confirm the count against the dynamic-programming recursion.",
+        "Fine-tune a pretrained self-supervised speech model on one hour of "
+        "labelled audio and compare with a model trained from scratch on the "
+        "same hour.",
+        "Build a cross-modal search demo: embed 1,000 images with a CLIP-class "
+        "model and retrieve them by text query. Then find a query where the "
+        "compositional failure in the table above is visible.",
+    ], ordered=True)
+
+    # --------------------------------------------------------------- Ch 44 ---
+    chapter("Systems and Scale: Hardware, Memory and Distributed Training")
+    p("Beyond a certain size, machine learning stops being a modelling problem "
+      "and becomes a systems problem: how many bytes fit, how fast they move, "
+      "and how many machines can cooperate without spending all their time "
+      "talking. This chapter gives the arithmetic to answer those questions "
+      "before you rent the hardware.")
+
+    h2("What a GPU actually is, for our purposes")
+    tbl(["Component", "Role", "Order of magnitude (data-centre GPU)"],
+        [["Tensor cores", "Matrix-multiply-accumulate in low precision",
+          "Hundreds of TFLOP/s in bf16, more in fp8"],
+         ["HBM (device memory)", "Where weights and activations live",
+          "40-192 GB at 1.5-8 TB/s"],
+         ["SRAM / shared memory", "On-chip scratchpad per streaming "
+          "multiprocessor", "Tens of MB total, ~10x the bandwidth of HBM"],
+         ["Interconnect (NVLink)", "GPU-to-GPU inside a node",
+          "Hundreds of GB/s"],
+         ["Network (InfiniBand/Ethernet)", "Node-to-node",
+          "25-400 Gb/s - roughly an order of magnitude below NVLink"]],
+        widths=[24, 36, 40], bold_first=True)
+    eq(["Arithmetic intensity  I = FLOPs performed / bytes moved",
+        "Roofline:  achievable FLOP/s = min( peak FLOP/s , I * memory bandwidth )",
+        "Ridge point: I* = peak FLOP/s / bandwidth   (often 100-400 FLOP/byte)"],
+       "Below the ridge point you are memory-bound and adding compute does "
+       "nothing. This one inequality explains most disappointing benchmarks.")
+    box("key", "Where the common operations land",
+        "A large matrix multiply has intensity proportional to the shared "
+        "dimension: **compute-bound**, which is why training is dominated by "
+        "GEMMs and why bigger batches help. Elementwise operations (activation, "
+        "normalization, dropout, residual add) read and write more bytes than "
+        "they compute on: **memory-bound**, which is why kernel fusion - doing "
+        "several of them in one pass over the data - is where framework "
+        "compilers get their speedups. Single-token LLM decoding reads the "
+        "whole weight matrix to compute one vector product: **severely "
+        "memory-bound**, which is why decode throughput tracks memory bandwidth "
+        "and not FLOP/s, and why quantization (Chapter 28) speeds up generation "
+        "even when the arithmetic stays in higher precision.")
+
+    h2("Training memory, accounted exactly")
+    eq(["Per parameter, mixed-precision training with Adam:",
+        "  bf16 weights          2 bytes",
+        "  bf16 gradients        2 bytes",
+        "  fp32 master weights   4 bytes",
+        "  fp32 Adam m, v        8 bytes",
+        "  ------------------------------",
+        "  TOTAL                16 bytes per parameter",
+        "",
+        "Activations (per layer, per sample) ~ batch * seq * hidden * bytes",
+        "  * a constant of roughly 10-20 for a Transformer block"],
+       "The 16-bytes-per-parameter rule is the single most useful number in "
+       "large-model engineering.")
+    box("math", "Can I fine-tune a 7-billion-parameter model on one 80 GB GPU?",
+        "States: 7e9 x 16 bytes = **112 GB**. That exceeds 80 GB before a "
+        "single activation is stored, so full fine-tuning does not fit. The "
+        "options, in increasing order of intrusiveness: shard the optimizer "
+        "states across GPUs (ZeRO-1 across 4 GPUs brings it to 7e9 x (4 + 12/4) "
+        "= 49 GB each); offload optimizer states to CPU; use 8-bit Adam "
+        "(saves 6 bytes per parameter, giving 70 GB); or use LoRA (Chapter 24) "
+        "where the base weights are frozen at 2 bytes and only ~0.1% of "
+        "parameters have optimizer state - **7e9 x 2 + tiny = about 15 GB**, "
+        "which fits comfortably and is why LoRA became the default. Inference "
+        "alone needs 14 GB in bf16, or 7 GB in INT8, or 3.5 GB in INT4.")
+    p("Activations are the other half and the one people forget. "
+      "**Activation checkpointing** (gradient checkpointing) stores only the "
+      "inputs of each block and recomputes the interior during the backward "
+      "pass: memory falls from O(L) to about O(sqrt(L)) segments, at a cost of "
+      "roughly 30% extra compute. On any model that nearly fits, it is the "
+      "first lever to pull.")
+
+    h2("Precision")
+    tbl(["Format", "Bits (E/M)", "Property", "Use"],
+        [["fp32", "8/23", "The reference", "Master weights, reductions, loss"],
+         ["fp16", "5/10", "Narrow range; overflows",
+          "Needs dynamic loss scaling; legacy hardware"],
+         ["bf16", "8/7", "fp32's range, less mantissa",
+          "The training default today - no loss scaling needed"],
+         ["fp8 (E4M3/E5M2)", "4/3 and 5/2", "Per-tensor scaling required",
+          "Forward and backward GEMMs on recent hardware"],
+         ["INT8 / INT4", "integer", "Post-training or QAT (Chapter 28)",
+          "Inference, and increasingly KV caches"]],
+        widths=[16, 14, 34, 36], bold_first=True)
+    p("The rule that keeps mixed precision stable: **compute in low precision, "
+      "accumulate and update in high precision.** Matrix multiplies run in "
+      "bf16 or fp8; their accumulators are fp32; the master weights and the "
+      "optimizer moments stay fp32; loss and softmax reductions stay fp32. "
+      "Violating the last point is the usual cause of a training run that "
+      "diverges only at large batch sizes.")
+
+    h2("The four axes of parallelism")
+    tbl(["Axis", "What is split", "Communication", "When to use"],
+        [["Data parallel", "The batch; every GPU holds all weights",
+          "All-reduce of gradients once per step",
+          "Always, first, until the model stops fitting"],
+         ["ZeRO / FSDP", "Optimizer states, then gradients, then parameters",
+          "All-gather of parameters per layer, reduce-scatter of gradients",
+          "The standard way to train a model that does not fit, with minimal "
+          "code change"],
+         ["Tensor parallel", "Individual matrices, across GPUs",
+          "All-reduce twice per Transformer block - very heavy",
+          "Inside one node only, over NVLink"],
+         ["Pipeline parallel", "Layers, across GPUs",
+          "Point-to-point activations at stage boundaries",
+          "Across nodes, when depth is large"],
+         ["Sequence / context parallel", "The sequence dimension",
+          "Ring exchange of keys and values",
+          "Very long contexts, where activations dominate"],
+         ["Expert parallel (MoE)", "Experts across devices",
+          "All-to-all of tokens", "Sparse models with many experts"]],
+        widths=[18, 26, 30, 26], bold_first=True)
+    eq(["Ring all-reduce cost for S bytes over N workers:",
+        "  time  ~  2 (N - 1)/N * S / bandwidth      ->  ~ 2S/BW for large N",
+        "Pipeline bubble fraction with P stages and M microbatches:",
+        "  bubble = (P - 1) / (M + P - 1)     ->  keep M >> P"],
+       "With 4 pipeline stages and 8 microbatches, 27% of the time is bubble; "
+       "with 64 microbatches it is 4.5%.")
+    p("**3D parallelism** composes them: tensor-parallel within a node, "
+      "pipeline-parallel across a small group of nodes, data-parallel across "
+      "the rest. The ordering is not arbitrary - it puts the chattiest axis on "
+      "the fastest link. A practical rule: use FSDP/ZeRO-3 alone until "
+      "communication becomes the bottleneck, then introduce tensor parallelism "
+      "inside the node, and only then pipelining.")
+    code([
+        "# Data-parallel training, the modern minimal form",
+        "model = FSDP(model, sharding_strategy=FULL_SHARD,",
+        "             mixed_precision=MixedPrecision(param_dtype=torch.bfloat16,",
+        "                                            reduce_dtype=torch.float32))",
+        "for step, batch in enumerate(loader):",
+        "    with torch.autocast('cuda', dtype=torch.bfloat16):",
+        "        loss = model(batch).loss / accum_steps",
+        "    loss.backward()                       # gradients reduce-scattered",
+        "    if (step + 1) % accum_steps == 0:",
+        "        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)",
+        "        opt.step(); opt.zero_grad(set_to_none=True)",
+    ], "Gradient accumulation is the free way to raise the effective batch size "
+       "when memory is the limit; note that the loss must be divided by the "
+       "number of accumulation steps, and that gradient clipping belongs after "
+       "the last accumulation, not inside the loop.")
+
+    h2("Measuring whether your run is any good")
+    eq(["Model FLOPs Utilization (MFU):",
+        "  MFU = ( 6 * N_params * tokens_per_second ) / ( GPUs * peak FLOP/s )"],
+       "The 6ND rule from Chapter 36, turned into a hardware efficiency number.")
+    box("math", "An MFU calculation",
+        "A 7B model training at 12,000 tokens/second on 8 GPUs with 400 "
+        "TFLOP/s peak bf16 each. Numerator: 6 x 7e9 x 12,000 = 5.04e14 FLOP/s. "
+        "Denominator: 8 x 4e14 = 3.2e15. MFU = **15.8%**. That is poor - a "
+        "well-tuned dense Transformer run reaches 35-55%. The checklist, in the "
+        "order that usually pays: is the data loader starving the GPU (profile "
+        "it); is the sequence length so short that kernels are launch-bound; is "
+        "activation checkpointing on when it need not be; is tensor parallelism "
+        "spanning nodes; are you in fp32 by accident.")
+    tbl(["Symptom", "Likely cause", "Check"],
+        [["GPU utilization spiky, 40-70%", "Input pipeline",
+          "Time one epoch of the loader with the model removed"],
+         ["Utilization high, MFU low", "Memory-bound kernels, small shapes",
+          "Profile; fuse; raise batch or sequence length"],
+         ["Scaling breaks past 8 GPUs", "Gradient all-reduce over slow network",
+          "Measure interconnect bandwidth; enable bucketing and overlap"],
+         ["Loss spikes then diverges at scale", "fp16 range, or a bad LR "
+          "warmup", "Switch to bf16; lengthen warmup; clip gradients"],
+         ["Throughput falls over hours", "Thermal throttling or a straggler "
+          "rank", "Log per-rank step time; the slowest rank sets the pace"]],
+        widths=[26, 34, 40], bold_first=True)
+
+    h2("Serving: a different bottleneck")
+    p("Inference for autoregressive models has two phases with opposite "
+      "characteristics, and conflating them is the classic mistake.")
+    tbl(["Phase", "Work", "Bound by", "Lever"],
+        [["Prefill (prompt)", "One big matrix multiply over all prompt tokens",
+          "Compute", "Batching helps little; chunk long prompts"],
+         ["Decode (generation)", "One token at a time, reading all weights and "
+          "the KV cache", "Memory bandwidth",
+          "Batching helps enormously; quantization helps directly"]],
+        widths=[18, 38, 20, 24], bold_first=True)
+    bul([
+        "**Continuous batching** admits new requests into the running batch as "
+        "others finish, instead of waiting for a whole batch to complete - "
+        "typically a 2-4x throughput gain at the same latency.",
+        "**Paged attention** stores the KV cache in fixed-size blocks like "
+        "virtual memory pages, removing the fragmentation that otherwise wastes "
+        "half the cache.",
+        "**Speculative decoding** drafts several tokens with a small model and "
+        "verifies them in one pass of the large one; acceptance rates of 60-80% "
+        "give 2-3x lower latency with **identical** output distribution.",
+        "**Quantized serving** (INT8, INT4, fp8 weights, and increasingly "
+        "quantized KV caches) reduces both the memory read per token and the "
+        "cache footprint, so it raises the batch size you can hold as well as "
+        "the speed per token.",
+    ])
+    box("tip", "Sizing a serving deployment in five minutes",
+        "Weights: params x bytes-per-weight. KV cache per token: "
+        "2 x layers x kv_heads x head_dim x bytes. Multiply by the average "
+        "sequence length and the number of concurrent requests. Add 10-20% "
+        "overhead. If the total exceeds device memory, the fix is a smaller "
+        "quantization, grouped-query attention (fewer kv_heads), a shorter "
+        "context, or more GPUs - in that order of cost-effectiveness. Then "
+        "measure tokens/second at your target p95 latency, not at maximum "
+        "throughput, because those two operating points can differ by 5x.")
+
+    h3("Exercises")
+    bul([
+        "Compute the training memory for a 1.3B model with Adam in mixed "
+        "precision, then recompute it with 8-bit Adam and with LoRA.",
+        "Measure the MFU of a training run you have access to, then remove the "
+        "data loader (feed synthetic tensors) and measure again. The difference "
+        "is your input pipeline's cost.",
+        "Derive the pipeline bubble fraction and plot it for P = 4 and M from "
+        "4 to 128.",
+        "Serve a small model with and without continuous batching and compare "
+        "throughput at fixed p95 latency.",
+        "Take the roofline model and classify five operations in your own "
+        "network as compute- or memory-bound, then verify with a profiler.",
+    ], ordered=True)
+
+    # --------------------------------------------------------------- Ch 45 ---
+    chapter("Causal Inference and Experimentation")
+    p("Every model in this book answers 'what is associated with what'. Almost "
+      "every decision made with a model asks 'what happens if I intervene'. "
+      "Those are different questions, and no amount of predictive accuracy "
+      "converts one into the other. A model can predict hospital readmission "
+      "perfectly and still be useless for deciding who to treat - and a feature "
+      "with a large importance score can have the opposite sign as a causal "
+      "effect.")
+
+    h2("Prediction is not intervention")
+    box("math", "Simpson's paradox, with the classic numbers",
+        "Two treatments for kidney stones. Treatment A succeeds in 81 of 87 "
+        "cases with small stones (**93%**) and 192 of 263 with large stones "
+        "(**73%**). Treatment B succeeds in 234 of 270 small (**87%**) and 55 "
+        "of 80 large (**69%**). A is better in both groups. Yet overall A is "
+        "273/350 = **78%** and B is 289/350 = **83%** - B looks better. The "
+        "reason is that doctors gave A to the hard cases: stone size is a "
+        "**confounder**, causing both the treatment assignment and the outcome. "
+        "Any model fitted on this data without stone size will confidently "
+        "recommend the worse treatment. **No sample size fixes this**; it is "
+        "not noise, it is structure.")
+    eq(["Potential outcomes:   Y(1) = outcome if treated",
+        "                      Y(0) = outcome if not treated",
+        "Individual effect     tau_i = Y_i(1) - Y_i(0)      NEVER observed",
+        "ATE   = E[ Y(1) - Y(0) ]                  average over everyone",
+        "ATT   = E[ Y(1) - Y(0) | T = 1 ]          among the treated",
+        "CATE  = E[ Y(1) - Y(0) | X = x ]          conditional on features"],
+       "The fundamental problem of causal inference: for each unit you observe "
+       "exactly one of the two potential outcomes. Causal inference is a "
+       "missing-data problem.")
+    p("Randomization solves it in one stroke: if treatment is assigned by a coin "
+      "flip, then the treated and untreated groups differ only by chance in "
+      "**every** variable, observed or not, so the difference in average "
+      "outcomes estimates the ATE without bias. That is the entire justification "
+      "for the A/B test, and it is why an experiment beats any observational "
+      "analysis that is available.")
+
+    h2("Running an experiment that means something")
+    eq(["Sample size per arm, two-sided test at level alpha with power 1-beta:",
+        "  n = 2 (z_(1-alpha/2) + z_(1-beta))^2 * sigma^2 / delta^2",
+        "  For a proportion:  sigma^2 = p (1 - p)",
+        "  z_0.975 = 1.960,   z_0.80 = 0.8416"])
+    box("math", "How much traffic do I need?",
+        "Baseline conversion 5%, and you want to detect a **relative** lift of "
+        "2%, i.e. delta = 0.001 in absolute terms. sigma^2 = 0.05(0.95) = "
+        "0.0475. Then n = 2(1.960 + 0.8416)^2 (0.0475) / (0.001)^2 = "
+        "2(7.849)(0.0475)/1e-6 = **746,000 users per arm**. At 50,000 users a "
+        "day that is a **30-day** experiment. Detecting a 10% relative lift "
+        "instead needs 1/25 of that - about 30,000 per arm, or under two days. "
+        "**Power scales with the square of the effect you are chasing**, which "
+        "is why 'we will just run it and see' is not a plan and why small "
+        "effects are usually undetectable at any realistic traffic.")
+    tbl(["Threat to validity", "What goes wrong", "Treatment"],
+        [["Peeking", "Checking daily and stopping at significance inflates "
+          "the false-positive rate far above 5%",
+          "Fix the horizon in advance, or use a sequential test (always-valid "
+          "p-values, group-sequential boundaries)"],
+         ["Multiple metrics", "Twenty metrics give one 'significant' result by "
+          "chance", "Declare one primary metric; treat the rest as guardrails "
+          "with corrected thresholds"],
+         ["Interference (SUTVA violation)", "One user's treatment affects "
+          "another - marketplaces, social graphs, shared inventory",
+          "Cluster randomization, switchback designs, or budget-split designs"],
+         ["Novelty and primacy effects", "Behaviour changes because the thing "
+          "is new, then reverts",
+          "Run long enough; analyse new versus returning users separately"],
+         ["Sample-ratio mismatch", "Arms receive unequal traffic, revealing a "
+          "broken assignment", "Chi-square test on the split every day; an SRM "
+          "invalidates the experiment, full stop"],
+         ["Under-powered launch decisions", "A non-significant result is read "
+          "as 'no effect'", "Report the confidence interval; 'we could not "
+          "detect an effect smaller than 3%' is the honest statement"]],
+        widths=[22, 40, 38], bold_first=True)
+    box("tip", "CUPED: the free variance reduction",
+        "If you have a pre-experiment covariate X correlated with the outcome Y "
+        "(typically the same metric measured before the experiment), analyse "
+        "Y_adj = Y - theta (X - E[X]) with theta = Cov(X,Y)/Var(X). The "
+        "adjusted metric has variance reduced by a factor (1 - rho^2). With a "
+        "correlation of 0.7, that is half the variance and therefore **half the "
+        "required sample size** - the cheapest experimental improvement "
+        "available, and it is unbiased because X predates the assignment.")
+
+    h2("When you cannot randomize")
+    p("Sometimes the intervention is already deployed, unethical to withhold, or "
+      "outside your control. Then you must adjust for confounding explicitly, "
+      "and the first step is to draw the graph.")
+    diagram([
+        "   CONFOUNDER (adjust for it)      COLLIDER (do NOT adjust for it)",
+        "                                                                  ",
+        "          Z                                    T --> C <-- Y      ",
+        "        /   \\                                                     ",
+        "       v     v                       Conditioning on C creates a  ",
+        "      T ----> Y                      spurious T-Y association     ",
+        "                                     where none existed.          ",
+        "                                                                  ",
+        "   MEDIATOR (adjust only if you want the direct effect)           ",
+        "      T --> M --> Y                                               ",
+    ], "The backdoor criterion: to estimate the effect of T on Y, block every "
+       "path that enters T through an arrow into it, and never open a path by "
+       "conditioning on a collider or its descendants.")
+    box("warn", "'Control for everything' is wrong, not just wasteful",
+        "Adding every available variable to a regression is standard practice "
+        "and can move an estimate away from the truth. Conditioning on a "
+        "collider manufactures correlation; conditioning on a mediator removes "
+        "the very effect you were measuring; conditioning on a post-treatment "
+        "variable does both. **Which variables to adjust for is a question "
+        "about the world, answerable only with domain knowledge - the data "
+        "cannot tell you.**")
+    tbl(["Design", "Assumption it needs", "Typical use"],
+        [["Propensity matching / weighting",
+          "No unmeasured confounders; overlap between groups",
+          "Observational program evaluation"],
+         ["Doubly robust (AIPW)", "Either the outcome model or the propensity "
+          "model is correct", "The default estimator when you must adjust"],
+         ["Difference-in-differences", "Parallel trends absent treatment",
+          "A change rolled out to some regions or at some date"],
+         ["Instrumental variables", "The instrument affects treatment only, "
+          "not the outcome directly", "Encouragement designs, imperfect "
+          "compliance, natural experiments"],
+         ["Regression discontinuity", "Units just above and below a cutoff are "
+          "comparable", "Eligibility thresholds, score cutoffs"],
+         ["Synthetic control", "A weighted combination of untreated units "
+          "tracks the treated one before treatment",
+          "One treated region or market"]],
+        widths=[26, 40, 34], bold_first=True)
+
+    h2("Heterogeneous effects and uplift modelling")
+    p("The average effect answers 'should we launch this'. The conditional "
+      "effect answers 'for whom' - which is the question that makes targeting "
+      "profitable. Note the four-way segmentation that makes uplift different "
+      "from response modelling:")
+    tbl(["Segment", "Treated outcome", "Untreated outcome", "Action"],
+        [["Persuadables", "Converts", "Does not", "**Target these**"],
+         ["Sure things", "Converts", "Converts", "Waste of budget"],
+         ["Lost causes", "Does not", "Does not", "Waste of budget"],
+         ["Sleeping dogs", "Does not", "Converts",
+          "**Actively harmful to target**"]],
+        widths=[24, 24, 24, 28], bold_first=True)
+    p("A response model that predicts P(convert | treated) targets sure things, "
+      "because they are the easiest to predict. Uplift models estimate the "
+      "difference instead:")
+    bul([
+        "**S-learner**: one model with treatment as a feature; simple, but the "
+        "model may ignore a weak treatment feature entirely.",
+        "**T-learner**: separate models for treated and control; unbiased in "
+        "structure, but the difference of two noisy models is noisier still.",
+        "**X-learner**: impute each unit's counterfactual with the opposite "
+        "model, then regress; much better with unbalanced arms.",
+        "**Causal forests / DR-learner**: honest sample splitting with doubly "
+        "robust scores; the current default for credible CATE estimates.",
+    ])
+    p("Evaluate with the **Qini or uplift curve**: sort by predicted uplift, and "
+      "plot the cumulative incremental conversions against the fraction "
+      "targeted. The area over the random line is the value of the targeting. "
+      "Ordinary AUC is meaningless here - you can never observe the "
+      "individual-level label being predicted.")
+    box("key", "The rule that saves the most money",
+        "Never evaluate a targeting policy on the same experiment that trained "
+        "it, and never evaluate it on outcome prediction accuracy. Hold out a "
+        "randomized slice permanently, and measure the incremental effect of "
+        "the policy in that slice. Almost every 'our model increased revenue "
+        "40%' claim that later evaporated was an uplift claim measured with a "
+        "response metric.")
+
+    h3("Exercises")
+    bul([
+        "Reproduce the kidney-stone numbers and confirm both the within-group "
+        "and the aggregate comparison.",
+        "Compute the required sample size for your own product's baseline "
+        "conversion rate and the smallest lift worth shipping.",
+        "Simulate peeking: generate 1,000 A/A experiments, test daily for 14 "
+        "days, and count how often you would have declared significance.",
+        "Apply CUPED to a past experiment using the pre-period metric and "
+        "report the variance reduction achieved.",
+        "Take an observational dataset, draw the DAG, and estimate an effect "
+        "twice: once adjusting for a collider and once not. Report both.",
+    ], ordered=True)
+
+    # --------------------------------------------------------------- Ch 46 ---
+    chapter("Privacy, Security and Governance")
+    p("A model is a lossy, queryable copy of its training data, deployed at an "
+      "endpoint anyone can probe. That framing makes the risks concrete: data "
+      "can leak out of the weights, behaviour can be corrupted by data going "
+      "in, and the interface itself is an attack surface. This chapter covers "
+      "the mechanisms and the obligations, both of which now appear in "
+      "procurement questionnaires and in law.")
+
+    h2("The threat model")
+    tbl(["Attack", "What the adversary gets", "Practical defence"],
+        [["Membership inference", "Whether a specific record was in training",
+          "Reduce overfitting, limit confidence output, differential privacy"],
+         ["Training-data extraction", "Verbatim memorized secrets from a "
+          "generative model", "Deduplicate the corpus, scan and filter "
+          "secrets, DP fine-tuning, output filters"],
+         ["Model inversion", "Reconstruction of typical class inputs",
+          "Restrict query volume and returned detail"],
+         ["Model extraction / stealing", "A functional copy from the API",
+          "Rate limits, monitoring for systematic querying, watermarking"],
+         ["Data poisoning / backdoor", "A trigger that flips predictions",
+          "Provenance for training data, anomaly screening, hold out a trusted "
+          "clean evaluation set"],
+         ["Adversarial examples", "Wrong output from a tiny perturbation",
+          "Adversarial training, input sanitization, ensembling (Chapter 33)"],
+         ["Prompt injection", "An LLM agent follows instructions from "
+          "retrieved content", "Treat all retrieved text as untrusted data; "
+          "constrain tools; require confirmation for consequential actions"],
+         ["Supply chain", "Malicious code in weights or a dependency",
+          "Load only safetensors-style formats, never arbitrary pickles; pin "
+          "and verify hashes"]],
+        widths=[22, 38, 40], bold_first=True)
+    box("warn", "Memorization is measurable, so measure it",
+        "Large models reproduce rare training strings verbatim, and the rate "
+        "rises with model size, with duplication in the corpus, and with the "
+        "length of the prefix you supply. Before releasing a model trained on "
+        "internal data, run the extraction test yourself: prompt it with "
+        "prefixes of known-sensitive records and check what completes. "
+        "Deduplication of the training corpus is the single most effective "
+        "mitigation, and it improves quality at the same time.")
+
+    h2("Differential privacy, precisely enough to use")
+    eq(["A randomized mechanism M is (epsilon, delta)-differentially private if",
+        "for any two datasets D, D' differing in one record, and any output S:",
+        "",
+        "    P[ M(D) in S ]  <=  e^epsilon * P[ M(D') in S ]  +  delta",
+        "",
+        "Interpretation: whatever anyone can conclude about you from the",
+        "output, they could almost equally have concluded had you not",
+        "participated at all."],
+       "epsilon is a privacy budget: smaller is stronger, and budgets compose "
+       "additively across queries.")
+    code([
+        "# DP-SGD: two changes to an ordinary training step",
+        "for batch in loader:",
+        "    per_sample_grads = compute_per_sample_gradients(model, batch)",
+        "    # 1. clip each example's gradient to a fixed L2 norm C",
+        "    clipped = [g * min(1.0, C / (g.norm() + 1e-6))",
+        "               for g in per_sample_grads]",
+        "    g_sum = sum(clipped)",
+        "    # 2. add Gaussian noise calibrated to C and the noise multiplier",
+        "    g_noisy = (g_sum + torch.normal(0., sigma * C, g_sum.shape)) / B",
+        "    optimizer.step_with(g_noisy)",
+        "# The accountant tracks epsilon from (sigma, sampling rate, steps).",
+    ], "Clipping bounds any single example's influence; the noise hides it. The "
+       "cost is real: per-sample gradients are memory-hungry, and accuracy "
+       "falls - typically a few points at epsilon around 8, more on small or "
+       "imbalanced datasets.")
+    tbl(["epsilon", "Reading", "Where it is seen"],
+        [["< 1", "Strong formal guarantee", "Aggregate statistics, census-style "
+          "releases"],
+         ["1 - 10", "Meaningful in practice; the usual operating range",
+          "DP-SGD fine-tuning, telemetry collection"],
+         ["> 20", "Little formal meaning; still blocks naive memorization",
+          "Reported honestly, or not reported at all"]],
+        widths=[14, 46, 40], bold_first=True)
+    p("Federated learning (Chapter 31) is **not** privacy on its own: raw "
+      "gradients can reveal their inputs, sometimes reconstructing images "
+      "exactly. It becomes a privacy mechanism when combined with secure "
+      "aggregation (the server sees only the sum of many updates) and "
+      "user-level DP noise. State which of the three you have; they are "
+      "routinely conflated in marketing material.")
+
+    h2("Handling personal data")
+    bul([
+        "**Minimize**: the strongest protection for a field is not collecting "
+        "it. Ask what decision each feature supports before it enters the "
+        "warehouse.",
+        "**Separate identity from behaviour**: pseudonymize with keyed hashes, "
+        "hold the key separately, and rotate it. Note that pseudonymized data "
+        "is still personal data under most regimes.",
+        "**Do not rely on k-anonymity alone**: high-dimensional behavioural "
+        "data re-identifies easily - a handful of timestamped locations or "
+        "ratings is usually unique to one person.",
+        "**Retention and deletion**: define a retention period per dataset and "
+        "enforce it automatically. A deletion request must reach backups, "
+        "feature stores, logs and derived datasets, not just the primary table.",
+        "**Unlearning**: removing a record's influence from trained weights is "
+        "genuinely hard. The practical answers are retraining on a schedule, "
+        "sharded training so only one shard must be retrained, or DP training "
+        "that bounds any single record's influence in advance. Decide which "
+        "before you promise deletion.",
+        "**Cross-border and vendor flows**: sending data to an external API is "
+        "a transfer; check what the provider retains and for how long, and "
+        "record that decision where an auditor can find it.",
+    ])
+
+    h2("Securing a deployed model, and an agent")
+    tbl(["Layer", "Control"],
+        [["Input", "Schema and range validation, size limits, content-type "
+          "checks; reject rather than coerce"],
+         ["Rate", "Per-key quotas and anomaly detection on query patterns - "
+          "the defence against extraction and inversion"],
+         ["Output", "Confidence rounding, refusal of out-of-scope requests, "
+          "PII and secret filters on generated text"],
+         ["Tools (agents)", "Least privilege per tool, allowlists for domains "
+          "and commands, no ambient credentials, human confirmation for "
+          "irreversible actions"],
+         ["Context (agents)", "Every retrieved document, web page, email and "
+          "tool result is **untrusted data**, never instructions; keep system "
+          "policy outside the retrievable corpus"],
+         ["Artefacts", "Signed model files, hash-pinned dependencies, no "
+          "arbitrary code execution on load, provenance recorded in the "
+          "registry"],
+         ["Monitoring", "Log inputs and outputs (with privacy controls), alert "
+          "on distribution shifts and on refusal-rate changes, and keep an "
+          "incident runbook with a rollback path"]],
+        widths=[18, 82], bold_first=True)
+    box("key", "The agent security rule, stated once",
+        "An LLM cannot reliably distinguish instructions written by your user "
+        "from instructions embedded in content it reads. Therefore security "
+        "cannot live in the prompt. It must live in the **capabilities**: what "
+        "the tools can do, what credentials they carry, and which actions "
+        "require a human. Design as if the model will at some point follow a "
+        "malicious instruction, because eventually it will.")
+
+    h2("Governance: the paperwork that is actually load-bearing")
+    tbl(["Artefact", "Contents", "Why it pays for itself"],
+        [["Datasheet for the dataset", "Provenance, consent basis, collection "
+          "period, known gaps, licence", "Answers the question that stalls "
+          "every deployment review"],
+         ["Model card", "Intended use, out-of-scope use, training data "
+          "summary, metrics by slice, limitations",
+          "Forces the slice evaluation that finds the failure before users do"],
+         ["Evaluation record", "Frozen test set, per-slice results, "
+          "calibration, robustness and safety probes", "The evidence when a "
+          "regression is disputed"],
+         ["Risk classification", "The decision the model influences, who is "
+          "affected, reversibility, human oversight",
+          "Determines how much of the rest is required at all"],
+         ["Change log and registry", "Versions, data snapshots, approvals, "
+          "rollbacks", "Makes incident response minutes rather than days"]],
+        widths=[22, 44, 34], bold_first=True)
+    p("Regimes differ in detail and change often, but the shape is now stable "
+      "across them: obligations scale with the **risk of the use case**, not "
+      "with the size of the model. Systems that affect employment, credit, "
+      "education, essential services, health or law enforcement attract "
+      "documentation, human-oversight, accuracy and record-keeping duties; "
+      "content generation attracts disclosure duties; most internal tooling "
+      "attracts little beyond ordinary data protection. Classify your use case "
+      "early - it is cheap then, and expensive after the architecture is "
+      "fixed.")
+    checklist("Before a model touches real users", [
+        "The legal basis for every training data source is written down.",
+        "Personal fields are minimized, pseudonymized, and on a retention "
+        "clock.",
+        "A memorization or membership probe has been run for generative or "
+        "small-data models.",
+        "Slice metrics exist for the groups the system can plausibly harm.",
+        "Input validation, rate limits and output filters are deployed, not "
+        "planned.",
+        "Agent tools follow least privilege, with confirmation on irreversible "
+        "actions.",
+        "The model card, datasheet and evaluation record exist and are "
+        "current.",
+        "A rollback path and an incident owner are named and have been "
+        "rehearsed.",
+    ])
+
+    h3("Exercises")
+    bul([
+        "Run a membership-inference check on a model you trained: compare the "
+        "loss distribution on training rows against held-out rows. A visible "
+        "gap is the attack surface.",
+        "Fine-tune a small model with and without DP-SGD at epsilon around 8 "
+        "and report the accuracy cost.",
+        "Take a retrieval-augmented assistant and write three prompt-injection "
+        "payloads into the corpus it reads. Then fix it at the capability "
+        "layer rather than in the prompt.",
+        "Write the model card and datasheet for a model you have already "
+        "shipped. Note every question you cannot answer - each one is a gap.",
+        "Trace a deletion request end to end through your systems and list "
+        "every store that would retain the record.",
+    ], ordered=True)
+
     ch_project()
 
 
@@ -5863,13 +8068,101 @@ def appendices():
         ("Weight decay", "Shrinking weights towards zero each step; L2 "
          "regularisation, decoupled in AdamW."),
         ("Zero-shot", "Performing a task with no task-specific training examples."),
+        ("A/B test", "A randomised controlled experiment on live traffic; the "
+         "only design that estimates a causal effect without assumptions."),
+        ("Arithmetic intensity", "FLOPs performed per byte moved; decides "
+         "whether an operation is compute-bound or memory-bound."),
+        ("ATE / CATE", "Average treatment effect over everyone, and the "
+         "conditional version for a given feature vector."),
+        ("Backdoor criterion", "The graphical rule for choosing which "
+         "variables to adjust for when estimating a causal effect."),
+        ("BM25", "A length-normalised, frequency-saturating sparse retrieval "
+         "score; still the strongest non-neural retriever."),
+        ("BPR", "Bayesian Personalised Ranking; a pairwise loss that trains a "
+         "recommender to order a seen item above a sampled unseen one."),
+        ("Collider", "A variable caused by two others; conditioning on it "
+         "creates a spurious association between them."),
+        ("CTC", "Connectionist Temporal Classification; a loss that sums over "
+         "all alignments of an output sequence to a longer input."),
+        ("CUPED", "Variance reduction in experiments using a pre-experiment "
+         "covariate; typically halves the required sample size."),
+        ("Differential privacy", "A formal guarantee, parameterised by "
+         "epsilon, that one record's presence barely changes the output "
+         "distribution."),
+        ("Double descent", "The modern test-error curve: rising to a peak at "
+         "the interpolation threshold, then falling again as capacity grows."),
+        ("DP-SGD", "Training with per-example gradient clipping plus "
+         "calibrated Gaussian noise, giving a differential-privacy bound."),
+        ("ELBO", "Evidence lower bound; the objective maximised by variational "
+         "inference and by variational autoencoders."),
+        ("EM algorithm", "Alternating expected-assignment and "
+         "parameter-update steps for models with latent variables."),
+        ("FSDP / ZeRO", "Sharding optimiser states, gradients and parameters "
+         "across data-parallel workers so a model too large for one device "
+         "fits."),
+        ("Gaussian process", "A prior over functions defined by a kernel; "
+         "gives exact posterior uncertainty and drives Bayesian optimisation."),
+        ("Hidden Markov model", "A latent discrete state sequence with "
+         "observations; solved by forward-backward and Viterbi."),
+        ("IoU", "Intersection over union of two regions; the matching "
+         "criterion behind detection and segmentation metrics."),
+        ("Log-mel spectrogram", "Log energies in mel-spaced frequency bands; "
+         "the standard input representation for speech models."),
+        ("mAP", "Mean average precision: area under the precision-recall "
+         "curve, averaged over classes and (in COCO style) IoU thresholds."),
+        ("MASE", "Mean absolute scaled error; forecast error divided by the "
+         "naive baseline's error, so values below 1 mean you beat it."),
+        ("Matrix factorisation", "Representing a user-item matrix as the "
+         "product of low-rank user and item factors plus bias terms."),
+        ("MFU", "Model FLOPs utilisation: achieved model FLOPs divided by the "
+         "hardware's peak; 35-55% is a healthy dense training run."),
+        ("NDCG", "Normalised discounted cumulative gain; the standard ranking "
+         "metric, discounting relevance logarithmically by position."),
+        ("Pipeline bubble", "Idle time in pipeline parallelism, equal to "
+         "(P-1)/(M+P-1) for P stages and M microbatches."),
+        ("Position bias", "The tendency of users to click higher-ranked items "
+         "regardless of relevance; must be corrected before training on clicks."),
+        ("Potential outcomes", "The pair of results a unit would have under "
+         "treatment and under control; only one is ever observed."),
+        ("Prompt injection", "Instructions hidden in retrieved content that an "
+         "LLM agent follows; mitigated at the capability layer, not the prompt."),
+        ("Propensity score", "The probability of receiving treatment given "
+         "covariates; used for matching, weighting and off-policy estimates."),
+        ("Rademacher complexity", "The expected ability of a class to fit "
+         "random signs on your sample; a data-dependent complexity measure."),
+        ("RAG", "Retrieval-augmented generation: retrieve passages, then "
+         "condition the generator on them and cite them."),
+        ("Roofline", "The bound min(peak FLOP/s, intensity x bandwidth) that "
+         "explains most disappointing hardware benchmarks."),
+        ("Scaling law", "An empirical power law relating loss to parameters, "
+         "data and compute; the basis of Chinchilla-optimal training."),
+        ("Speculative decoding", "Drafting tokens with a small model and "
+         "verifying them with the large one, preserving the output "
+         "distribution."),
+        ("STL decomposition", "Splitting a series into seasonal, trend and "
+         "remainder components using local regression."),
+        ("Stationarity", "Constant mean, variance and autocovariance over "
+         "time; required by classical time-series models, obtained by "
+         "differencing."),
+        ("Two-tower model", "Separate user and item encoders scored by dot "
+         "product, allowing item embeddings to be indexed for fast retrieval."),
+        ("Uplift model", "A model of the treatment effect rather than the "
+         "outcome; targets persuadables and avoids sleeping dogs."),
+        ("VC dimension", "The largest number of points a hypothesis class can "
+         "label in every possible way; controls the classical generalisation "
+         "bound."),
+        ("Viterbi algorithm", "Dynamic programming for the most probable "
+         "hidden state sequence in an HMM."),
+        ("WER", "Word error rate: substitutions plus insertions plus deletions "
+         "over reference words; can exceed 100%."),
     ]
-    tbl(["Term", "Definition"], [[a, b] for a, b in gloss],
+    tbl(["Term", "Definition"],
+        [[a, b] for a, b in sorted(gloss, key=lambda t: t[0].lower())],
         widths=[26, 74], bold_first=True)
 
     # ------------------------------------------------------------ Appendix C -
     appendix("Study Roadmap, Projects and Resources")
-    ah2("A 24-week study plan")
+    ah2("A 30-week study plan")
     tbl(["Weeks", "Focus", "Deliverable"],
         [["1-2", "Python, NumPy, pandas, plotting; Chapters 1-2",
           "Load a dataset, clean it, plot five informative figures"],
@@ -5893,7 +8186,19 @@ def appendices():
           "A VAE and a small diffusion model on 32x32 images"],
          ["23-24", "Chapters 28-31, 34: efficiency and deployment",
           "Quantize, prune and deploy one model to a device or an API, with "
-          "measured latency"]],
+          "measured latency"],
+         ["25-26", "Chapters 36-37: learning theory, probabilistic modelling",
+          "Run the label-randomisation test on two models; fit a GP and a GMM "
+          "from scratch"],
+         ["27-28", "Two domain chapters of your choice from 38-42",
+          "One end-to-end project in that domain with the domain's own metric "
+          "reported against a naive baseline"],
+         ["29", "Chapter 43: hardware, memory and distributed training",
+          "Measure MFU on a real run and account for every gigabyte of memory "
+          "it uses"],
+         ["30", "Chapters 45-46: causal inference, then the full project "
+          "walkthrough", "Design an A/B test with a power calculation, then "
+          "run the thirteen stages end to end"]],
         widths=[10, 42, 48], bold_first=True)
 
     ah2("Portfolio projects worth building")
@@ -7964,7 +10269,7 @@ def ch_project():
 # =============================================================================
 def main():
     front_matter()
-    part1(); part2(); part3(); part4(); part5()
+    part1(); part2(); part3(); part4(); part5(); part6()
     appendices()
     doc = Book(OUTPUT,
                title="Machine Learning and Deep Learning - The Complete Guide",
