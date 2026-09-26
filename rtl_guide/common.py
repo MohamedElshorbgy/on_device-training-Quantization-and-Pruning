@@ -24,6 +24,44 @@ from gen_ml_dl_guide_pdf import (  # noqa: F401  (re-exported for the parts)
 from reportlab.platypus import CondPageBreak
 
 
+def _is_comment(line):
+    """`//` comments, and `#` comments only when `#` is not a Verilog delay
+    or parameter list such as `#10`, `#(` or `#1step`."""
+    t = line.strip()
+    if t.startswith("//"):
+        return True
+    return t.startswith("#") and (len(t) == 1 or t[1] in " #!")
+
+
+def code(lines, caption=None, lang=None):
+    """Grey code card (same look as the base engine's code())."""
+    if isinstance(lines, str):
+        lines = lines.split("\n")
+    rows = []
+    for ln in lines:
+        ln = ln.rstrip("\n")
+        esc = xe(ln).replace(" ", "&nbsp;")
+        if _is_comment(ln):
+            esc = '<font color="#2e7d32"><i>%s</i></font>' % esc
+        rows.append([Paragraph(esc if esc else "&nbsp;", G.S_CODE)])
+    t = Table(rows, colWidths=[CONTENT_W])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), G.C_CODE_BG),
+        ("BOX", (0, 0), (-1, -1), 0.7, G.C_CODE_BD),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 0.6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0.6),
+        ("LINEBEFORE", (0, 0), (0, -1), 2.5, C_MID),
+    ]))
+    items = [Spacer(1, 3), t,
+             Paragraph(mk(caption), S_CAP) if caption else Spacer(1, 6)]
+    if len(rows) <= 18:
+        add(KeepTogether(items))
+    else:
+        add(*items)
+
+
 def h2(title):
     """Numbered section heading that never sits alone at a page bottom."""
     add(CondPageBreak(32 * mm))
@@ -77,14 +115,15 @@ def out(lines, caption=None):
         add(*items)
 
 
-def build(output, funcs, title="RTL Design for SoC & ASIC - The Complete Guide"):
+def build(output, funcs, title="RTL Design for SoC & ASIC - The Complete Guide",
+          subject="A beginner-to-expert guide to RTL design for SoC and ASIC "
+                  "development",
+          creator="gen_rtl_guide_pdf.py"):
     """Run the given part functions and write the PDF (used for smoke tests
     of a single part as well as for the full book)."""
     for f in funcs:
         f()
     doc = G.Book(output, title=title, author="Generated with Claude Code",
-                 subject="A beginner-to-expert guide to RTL design for SoC "
-                         "and ASIC development",
-                 creator="gen_rtl_guide_pdf.py")
+                 subject=subject, creator=creator)
     doc.multiBuild(G.STORY)
     print("Wrote %s (%.0f KB)" % (output, os.path.getsize(output) / 1024.0))
